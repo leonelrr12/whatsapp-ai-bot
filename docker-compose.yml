@@ -1,0 +1,34 @@
+services:
+  ollama:
+    image: ollama/ollama
+    container_name: ollama
+    restart: always
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+      # Añadimos esta línea para pasar el Modelfile al contenedor
+      - ./Modelfile:/tmp/Modelfile
+    networks:
+      - chatbot_network
+
+  backend:
+    build: ./backend
+    container_name: chatbot_backend
+    restart: always
+    depends_on:
+      - ollama
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    networks:
+      - chatbot_network
+
+volumes:
+  ollama_data:
+
+
+networks:
+  chatbot_network:
+    external: true
