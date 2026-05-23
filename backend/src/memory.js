@@ -26,6 +26,7 @@ const ALLOWED_FIELDS = Object.freeze([
   'desired_date',
   'lead_status',
   'notes',
+  'flow_state',
 ])
 
 async function updateCustomerMemory(phone, field, value) {
@@ -34,23 +35,12 @@ async function updateCustomerMemory(phone, field, value) {
     return
   }
 
-  const fieldIndex = ALLOWED_FIELDS.indexOf(field) + 1
-
-  const setClause = ALLOWED_FIELDS
-    .map((f, i) => `${f} = $${i + 1}`)
-    .join(', ')
-
-  const values = [
-    ...ALLOWED_FIELDS.map(f => f === field ? value : null),
-    phone
-  ]
-
   await db.query(
     `UPDATE customers
-     SET ${setClause},
+     SET ${field} = $1,
          updated_at = NOW()
-     WHERE phone = $${ALLOWED_FIELDS.length + 1}`,
-    values
+     WHERE phone = $2`,
+    [value, phone]
   )
 }
 

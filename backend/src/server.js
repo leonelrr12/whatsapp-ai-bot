@@ -12,6 +12,7 @@ const {
 } = require("./memory");
 
 const { extractCustomerData } = require("./extractor");
+const { processMessage, WELCOME_MESSAGE, FLOW_STATES, resetFlow } = require("./flow");
 
 const REQUIRED_ENV_VARS = [
   "PORT",
@@ -27,6 +28,10 @@ const REQUIRED_ENV_VARS = [
   "DB_PASSWORD",
   "DB_NAME",
 ];
+
+const USE_AI = process.env.USE_AI === 'true';
+console.log("=== CONFIG ===");
+console.log("USE_AI:", USE_AI);
 
 function validateEnvVars() {
   const missing = REQUIRED_ENV_VARS.filter((v) => !process.env[v]);
@@ -124,23 +129,43 @@ app.post("/webhook", async (req, res) => {
 
     await createCustomer(from);
 
-    const extractedData = extractCustomerData(text);
-
-    for (const [field, value] of Object.entries(extractedData)) {
-      await updateCustomerMemory(from, field, value);
+    const customer = await getCustomer(from);
+    
+    // Check if user wants to reset or start over
+    if (text.toLowerCase().includes('reiniciar') || text.toLowerCase().includes('empezar de nuevo')) {
+      await resetFlow(from);
+      await sendWhatsAppMessage(from, WELCOME_MESSAGE);
+      console.log("=== FLOW RESET ===");
+      return;
     }
-
-    const updatedCustomer = await getCustomer(from);
-
-    const aiResponse = await askAI(text, updatedCustomer);
-
-    await sendWhatsAppMessage(from, aiResponse);
-
-    await db.query(
-      `INSERT INTO messages(phone, message)
-       VALUES($1, $2)`,
-      [from, aiResponse],
-    );
+    
+    // Check if AI mode is enabled and user explicitly asks for it
+    if (USE_AI && (text.toLowerCase().includes('hablar con ia') || text.toLowerCase().includes('hablar con人工'))) {
+      const aiResponse = await askAI(text, customer);
+      await sendWhatsAppMessage(from, aiResponse);
+      console.log("=== AI MODE ===");
+      return;
+    }
+    
+    // Use flow-based responses (no AI)
+    const flowResult = await processMessage(from, text, USE_AI);
+    
+    if (flowResult.useAI && USE_AI) {
+      const aiResponse = await askAI(text, customer);
+      await sendWhatsAppMessage(from, aiResponse);
+      await db.query(
+        `INSERT INTO messages(phone, message)
+         VALUES($1, $2)`,
+        [from, aiResponse],
+      );
+    } else {
+      await sendWhatsAppMessage(from, flowResult.text);
+      await db.query(
+        `INSERT INTO messages(phone, message)
+         VALUES($1, $2)`,
+        [from, flowResult.text],
+      );
+    }
 
     console.log("=== MESSAGE PROCESSED OK ===");
   } catch (error) {
