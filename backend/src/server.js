@@ -59,40 +59,60 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-const processedMessages = new Set();
+const recentMessages = new Map();
+const DEDUPLICATION_WINDOW_MS = 10 * 1000; // 10 seconds
 
 app.post("/webhook", async (req, res) => {
+  console.log("=== WEBHOOK POST START ===");
+  console.log("Body keys:", Object.keys(req.body || {}));
+  
   try {
-    const value = req.body.entry?.[0]?.changes?.[0]?.value;
-
-    if (!value?.messages) {
+    const body = req.body;
+    
+    if (!body.entry || !body.entry[0]) {
+      console.log("No entry, ignoring");
       return res.sendStatus(200);
     }
 
-    const message = value?.messages?.[0];
-
-    if (!message) {
+    const value = body.entry[0].changes?.[0]?.value;
+    
+    if (!value?.messages || !value.messages[0]) {
+      console.log("No messages in value, ignoring");
       return res.sendStatus(200);
     }
 
-    if (message.from === process.env.BOT_PHONE_NUMBER) {
-      return res.sendStatus(200);
-    }
-
-    const messageId = message.id;
-    if (processedMessages.has(messageId)) {
-      console.log("Mensaje duplicado, ignorando:", messageId);
-      return res.sendStatus(200);
-    }
-    processedMessages.add(messageId);
-    if (processedMessages.size > 100) {
-      processedMessages.clear();
-    }
+    const message = value.messages[0];
+    console.log("Message:", message);
 
     const from = message.from;
-    const text = message.text?.body;
+    const text = message.text?.body || message.text?.message;
+    const timestamp = parseInt(message.timestamp) || Date.now();
+    
+    // Deduplication based on from + text content + 10-second window
+    const timeWindow = Math.floor(timestamp / 10000) * 10000;
+    const dedupKey = `${from}:${text}:${timeWindow}`;
+    
+    const now = Date.now();
+    if (recentMessages.has(dedupKey)) {
+      const lastTime = recentMessages.get(dedupKey);
+      if (now - lastTime < DEDUPLICATION_WINDOW_MS) {
+        console.log("Duplicate message ignored:", dedupKey);
+        return res.sendStatus(200);
+      }
+    }
+    recentMessages.set(dedupKey, now);
 
-    console.log("Mensaje recibido:", from, text, "ID:", messageId);
+    // Cleanup old entries
+    if (recentMessages.size > 1000) {
+      for (const [key, time] of recentMessages.entries()) {
+        if (now - time > DEDUPLICATION_WINDOW_MS * 2) {
+          recentMessages.delete(key);
+        }
+      }
+    }
+
+    console.log("=== MESSAGE RECEIVED ===");
+    console.log("From:", from, "Text:", text);
 
     res.sendStatus(200);
 
@@ -122,9 +142,9 @@ app.post("/webhook", async (req, res) => {
       [from, aiResponse],
     );
 
-    console.log("Mensaje procesado correctamente");
+    console.log("=== MESSAGE PROCESSED OK ===");
   } catch (error) {
-    console.error("Error procesando mensaje:", error);
+    console.error("Error:", error.message, error.stack);
   }
 });
 
