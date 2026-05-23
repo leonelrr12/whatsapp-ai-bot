@@ -27,6 +27,7 @@ const ALLOWED_FIELDS = Object.freeze([
   'lead_status',
   'notes',
   'flow_state',
+  'receipt_image',
 ])
 
 async function updateCustomerMemory(phone, field, value) {

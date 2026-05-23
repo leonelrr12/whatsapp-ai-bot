@@ -7,6 +7,7 @@ const FLOW_STATES = {
   CITY: "city",
   BUDGET: "budget",
   ADDITIONAL_INFO: "additional_info",
+  IMAGE: "image",
   COMPLETE: "complete",
   AI_MODE: "ai_mode",
 };
@@ -90,10 +91,16 @@ const RESPONSES = {
   [FLOW_STATES.BUDGET]: {
     default: {
       next: FLOW_STATES.ADDITIONAL_INFO,
-      text: "Gracias por la información 📱\n\n**¿Hay alguna información adicional que quieras proporcionarnos?**\n\nPor ejemplo: tamaño del techo, número de personas en el hogar, preferencia de marca, etc.\n\n(O si no tienes más información, solo dime \"no\" o \"continuar\")",
+      text: 'Gracias por la información 📱\n\n**¿Hay alguna información adicional que quieras proporcionarnos?**\n\nPor ejemplo: tipo de techo, si tienes planos de la casa o local, etc.\n\n(O si no tienes más información, solo dime "no")',
     },
   },
   [FLOW_STATES.ADDITIONAL_INFO]: {
+    default: {
+      next: FLOW_STATES.IMAGE,
+      text: '📸 **Opcional:** Si tienes a mano Recibo de luz, toma una foto de la parte que muestra el consumo de los últimos meses. Nos ayudará en el cálculo más preciso de tu ahorro.\n\n(Si no tienes el Recibo, solo dime "no")',
+    },
+  },
+  [FLOW_STATES.IMAGE]: {
     default: {
       next: FLOW_STATES.COMPLETE,
       text: "¡Perfecto! ✅\n\nHe recibido todos tus datos. Un asesor técnico te contactará en las próximas horas para:\n\n• Confirmar tu cotización\n• Programar la inspección técnica gratuita\n• Resolver cualquier duda\n\n**¿Tienes alguna pregunta adicional?**",
@@ -157,11 +164,11 @@ async function processMessage(phone, text, useAI = false) {
           greetingOption.service,
         );
       }
-      
+
       // Save the new state
       const newState = greetingOption.next;
       await updateCustomerMemory(phone, "flow_state", newState);
-      
+
       return { text: greetingOption.text, nextState: newState };
     }
 
@@ -173,11 +180,14 @@ async function processMessage(phone, text, useAI = false) {
     console.log("=== SERVICE_INFO STATE ===");
     console.log("Current state:", currentState);
     console.log("Text received:", text);
-    
+
     const option = text.trim();
     console.log("Option:", option);
-    console.log("Available options:", Object.keys(RESPONSES[FLOW_STATES.SERVICE_INFO]));
-    
+    console.log(
+      "Available options:",
+      Object.keys(RESPONSES[FLOW_STATES.SERVICE_INFO]),
+    );
+
     const serviceOption = RESPONSES[FLOW_STATES.SERVICE_INFO][option];
     console.log("Found option:", !!serviceOption);
 
@@ -191,8 +201,11 @@ async function processMessage(phone, text, useAI = false) {
         );
       }
       await updateCustomerMemory(phone, "flow_state", FLOW_STATES.NAME);
-      console.log("Saved flow_state to NAME, returning text:", serviceOption.text);
-      
+      console.log(
+        "Saved flow_state to NAME, returning text:",
+        serviceOption.text,
+      );
+
       // Return directly with the text from serviceOption, don't go through getFlowResponse
       return { text: serviceOption.text, nextState: FLOW_STATES.NAME };
     }
@@ -238,10 +251,31 @@ async function processMessage(phone, text, useAI = false) {
   }
   if (currentState === FLOW_STATES.ADDITIONAL_INFO) {
     const lower = text.toLowerCase();
-    if (lower === 'no' || lower === 'continuar' || lower === 'ninguna' || lower === 'nada') {
+    if (
+      lower === "no" ||
+      lower === "continuar" ||
+      lower === "ninguna" ||
+      lower === "nada"
+    ) {
       await updateCustomerMemory(phone, "notes", "Sin información adicional");
     } else {
       await updateCustomerMemory(phone, "notes", text.trim());
+    }
+  }
+  if (currentState === FLOW_STATES.IMAGE) {
+    const lower = text.toLowerCase();
+    if (
+      lower !== "imagen_recibida" &&
+      lower !== "continuar" &&
+      lower !== "no" &&
+      lower !== "ninguna"
+    ) {
+      const customer = await getCustomer(phone);
+      const existingNotes = customer?.notes || "";
+      const newNotes = existingNotes
+        ? `${existingNotes}\n${text.trim()}`
+        : text.trim();
+      await updateCustomerMemory(phone, "notes", newNotes);
     }
   }
 

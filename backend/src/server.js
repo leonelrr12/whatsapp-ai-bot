@@ -91,7 +91,11 @@ app.post("/webhook", async (req, res) => {
 
     const from = message.from;
     const text = message.text?.body || message.text?.message;
+    const image = message.image;
     const timestamp = parseInt(message.timestamp) || Date.now();
+    
+    console.log("Message type:", message.type);
+    console.log("Has image:", !!image);
     
     // Deduplication based on from + text content + 10-second window
     const timeWindow = Math.floor(timestamp / 10000) * 10000;
@@ -117,9 +121,44 @@ app.post("/webhook", async (req, res) => {
     }
 
     console.log("=== MESSAGE RECEIVED ===");
-    console.log("From:", from, "Text:", text);
+    console.log("From:", from, "Text:", text, "Type:", message.type);
 
     res.sendStatus(200);
+
+    // Handle image messages (recibo de luz)
+    if (message.type === 'image' && image) {
+      const imageUrl = `https://graph.facebook.com/v19.0/${image.id}/picture?access_token=${process.env.WHATSAPP_TOKEN}`;
+      console.log("Image received:", image.id);
+
+      await db.query(
+        `INSERT INTO messages(phone, message, image_url)
+         VALUES($1, $2, $3)`,
+        [from, `[Imagen: ${image.id}]`, imageUrl],
+      );
+
+      await createCustomer(from);
+
+      // Get current flow state before updating
+      const customer = await getCustomer(from);
+      const currentState = customer?.flow_state || '';
+
+      if (currentState === 'image') {
+        await updateCustomerMemory(from, 'receipt_image', imageUrl);
+        await updateCustomerMemory(from, 'notes', `Recibo de luz: ${imageUrl}`);
+        const flowResult = await processMessage(from, 'imagen_recibida', USE_AI);
+        await sendWhatsAppMessage(from, flowResult.text);
+        await db.query(
+          `INSERT INTO messages(phone, message)
+           VALUES($1, $2)`,
+          [from, flowResult.text],
+        );
+      } else {
+        await sendWhatsAppMessage(from, "¡Gracias por compartir la imagen! 📸 Un asesor la revisará pronto.");
+      }
+
+      console.log("=== IMAGE PROCESSED OK ===");
+      return;
+    }
 
     await db.query(
       `INSERT INTO messages(phone, message)
@@ -132,7 +171,7 @@ app.post("/webhook", async (req, res) => {
     const customer = await getCustomer(from);
     
     // Check if user wants to reset or start over
-    if (text.toLowerCase().includes('reiniciar') || text.toLowerCase().includes('empezar de nuevo')) {
+    if (text && (text.toLowerCase().includes('reiniciar') || text.toLowerCase().includes('empezar de nuevo'))) {
       await resetFlow(from);
       await sendWhatsAppMessage(from, WELCOME_MESSAGE);
       console.log("=== FLOW RESET ===");
@@ -140,9 +179,14 @@ app.post("/webhook", async (req, res) => {
     }
     
     // Check if AI mode is enabled and user explicitly asks for it
-    if (USE_AI && (text.toLowerCase().includes('hablar con ia') || text.toLowerCase().includes('hablar con人工'))) {
+    if (USE_AI && text && (text.toLowerCase().includes('hablar con ia') || text.toLowerCase().includes('hablar con人工'))) {
       const aiResponse = await askAI(text, customer);
       await sendWhatsAppMessage(from, aiResponse);
+      await db.query(
+        `INSERT INTO messages(phone, message)
+         VALUES($1, $2)`,
+        [from, aiResponse],
+      );
       console.log("=== AI MODE ===");
       return;
     }
