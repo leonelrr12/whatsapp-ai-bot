@@ -104,7 +104,7 @@ const RESPONSES = {
   [FLOW_STATES.IMAGE]: {
     default: {
       next: FLOW_STATES.COMPLETE,
-      text: "¡Perfecto! ✅\n\nHe recibido todos tus datos. Un asesor técnico te contactará en las próximas horas para:\n\n• Confirmar tu cotización\n• Programar la inspección técnica gratuita\n• Resolver cualquier duda\n\nEstas de acuerdo?.",
+      text: "¡Perfecto! ✅\n\nHe recibido todos tus datos. Un asesor técnico te contactará en las próximas horas para:\n\n• Confirmar tu cotización\n• Programar la inspección técnica gratuita\n• Resolver cualquier duda\n\nEsta Usted de acuerdo?.",
     },
   },
   [FLOW_STATES.COMPLETE]: {
