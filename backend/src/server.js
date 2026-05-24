@@ -13,6 +13,7 @@ const {
 
 const { extractCustomerData } = require("./extractor");
 const { processMessage, WELCOME_MESSAGE, FLOW_STATES, resetFlow } = require("./flow");
+const { appendToGoogleSheet } = require("./googleSheets");
 
 const REQUIRED_ENV_VARS = [
   "PORT",
@@ -65,7 +66,7 @@ app.get("/webhook", (req, res) => {
 });
 
 const recentMessages = new Map();
-const DEDUPLICATION_WINDOW_MS = 10 * 1000; // 10 seconds
+const DEDUPLICATION_WINDOW_MS = 3000; // 3 seconds (catch true duplicate API calls only)
 
 app.post("/webhook", async (req, res) => {
   console.log("=== WEBHOOK POST START ===");
@@ -97,9 +98,10 @@ app.post("/webhook", async (req, res) => {
     console.log("Message type:", message.type);
     console.log("Has image:", !!image);
     
-    // Deduplication based on from + text content + 10-second window
-    const timeWindow = Math.floor(timestamp / 10000) * 10000;
-    const dedupKey = `${from}:${text}:${timeWindow}`;
+    // Deduplication: include flow state to avoid blocking same text at different stages
+    const currentCustomer = await getCustomer(from);
+    const flowState = currentCustomer?.flow_state || 'new';
+    const dedupKey = `${from}:${text}:${flowState}:${message.id}`;
     
     const now = Date.now();
     if (recentMessages.has(dedupKey)) {
@@ -144,7 +146,6 @@ app.post("/webhook", async (req, res) => {
 
       if (currentState === 'image') {
         await updateCustomerMemory(from, 'receipt_image', imageUrl);
-        await updateCustomerMemory(from, 'notes', `Recibo de luz: ${imageUrl}`);
         const flowResult = await processMessage(from, 'imagen_recibida', USE_AI);
         await sendWhatsAppMessage(from, flowResult.text);
         await db.query(
@@ -172,6 +173,7 @@ app.post("/webhook", async (req, res) => {
     
     // Check if user wants to reset or start over
     if (text && (text.toLowerCase().includes('reiniciar') || text.toLowerCase().includes('empezar de nuevo'))) {
+      await updateCustomerMemory(from, 'submitted', 'false');
       await resetFlow(from);
       await sendWhatsAppMessage(from, WELCOME_MESSAGE);
       console.log("=== FLOW RESET ===");
@@ -209,6 +211,19 @@ app.post("/webhook", async (req, res) => {
          VALUES($1, $2)`,
         [from, flowResult.text],
       );
+    }
+
+    // Send to Google Sheets when flow completes (only once per customer)
+    console.log("Flow nextState:", flowResult.nextState);
+    if (flowResult.nextState === 'complete') {
+      const updatedCustomer = await getCustomer(from);
+      if (updatedCustomer && updatedCustomer.submitted !== 'true') {
+        console.log("Flow completado, enviando a Google Sheets...");
+        await updateCustomerMemory(from, 'submitted', 'true');
+        await appendToGoogleSheet(updatedCustomer);
+      } else {
+        console.log("Ya enviado a Google Sheets anteriormente, omitiendo");
+      }
     }
 
     console.log("=== MESSAGE PROCESSED OK ===");

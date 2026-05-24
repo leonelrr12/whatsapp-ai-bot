@@ -9,10 +9,11 @@ const FLOW_STATES = {
   ADDITIONAL_INFO: "additional_info",
   IMAGE: "image",
   COMPLETE: "complete",
+  END: "end",
   AI_MODE: "ai_mode",
 };
 
-const WELCOME_MESSAGE = `¡Hola! 👋 Bienvenido a **Green Energy Technology**
+const WELCOME_MESSAGE = `¡Hola! 👋 Bienvenido a *Green Energy Technology*
 
 Somos expertos en energía solar fotovoltaica. Estamos aquí para ayudarte aAHORRAR en tu factura de luz.
 
@@ -103,13 +104,27 @@ const RESPONSES = {
   [FLOW_STATES.IMAGE]: {
     default: {
       next: FLOW_STATES.COMPLETE,
-      text: "¡Perfecto! ✅\n\nHe recibido todos tus datos. Un asesor técnico te contactará en las próximas horas para:\n\n• Confirmar tu cotización\n• Programar la inspección técnica gratuita\n• Resolver cualquier duda\n\n**¿Tienes alguna pregunta adicional?**",
+      text: "¡Perfecto! ✅\n\nHe recibido todos tus datos. Un asesor técnico te contactará en las próximas horas para:\n\n• Confirmar tu cotización\n• Programar la inspección técnica gratuita\n• Resolver cualquier duda\n\nEstas de acuerdo?.",
     },
   },
   [FLOW_STATES.COMPLETE]: {
     default: {
       next: FLOW_STATES.COMPLETE,
-      text: "Gracias por contactarnos ✅\n\nUn asesor te contactará pronto. Mientras tanto, puedes ver más información en nuestra página web: **www.greenenergytechnologie.com**\n\n¿Hay algo más en lo que pueda ayudarte?",
+      text: "Gracias por contactarnos ✅\n\nUn asesor te contactará pronto. Mientras tanto, puedes ver más información en nuestra página web: *www.greenenergytechnologie.com*",
+    },
+    no: {
+      next: FLOW_STATES.END,
+      text: "¡Gracias por tu tiempo! 😊\n\nUn asesor se comunicará contigo pronto para darte seguimiento.\n\n¡Que tengas un excelente día! 🌞",
+    },
+    si: {
+      next: FLOW_STATES.COMPLETE,
+      text: "Claro, dime tu pregunta y con gusto te ayudaré.",
+    },
+  },
+  [FLOW_STATES.END]: {
+    default: {
+      next: FLOW_STATES.END,
+      text: '¡Gracias! 🙌 Puedes escribir "Hola" si necesitas ayuda en el futuro. ¡Hasta luego! 🌞',
     },
   },
 };
@@ -120,6 +135,7 @@ function getFlowResponse(state, message, customer) {
 
   if (
     state === FLOW_STATES.GREETING ||
+    state === FLOW_STATES.COMPLETE ||
     state === FLOW_STATES.SERVICE_INFO ||
     state === FLOW_STATES.AI_MODE
   ) {
@@ -257,7 +273,7 @@ async function processMessage(phone, text, useAI = false) {
       lower === "ninguna" ||
       lower === "nada"
     ) {
-      await updateCustomerMemory(phone, "notes", "Sin información adicional");
+      // No additional info provided, leave notes empty or with existing info
     } else {
       await updateCustomerMemory(phone, "notes", text.trim());
     }
