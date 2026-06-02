@@ -15,7 +15,7 @@ const FLOW_STATES = {
 
 const WELCOME_MESSAGE = `¡Hola! 👋 Bienvenido a *Green Energy Technology*
 
-Somos expertos en energía solar fotovoltaica. Estamos aquí para ayudarte aAHORRAR en tu factura de luz.
+Somos expertos en energía solar fotovoltaica. Estamos aquí para ayudarte a **ahorrar** en tu factura de luz.
 
 Para comenzar tu cotización sin compromiso, necesito algunos datos:
 

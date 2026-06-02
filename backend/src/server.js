@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const rateLimit = require("express-rate-limit");
 
 const { askAI } = require("./ai");
 const { sendWhatsAppMessage } = require("./whatsapp");
@@ -46,11 +47,28 @@ validateEnvVars();
 
 const app = express();
 
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: "Demasiadas solicitudes, intenta de nuevo más tarde" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
 app.get("/", (req, res) => {
   res.send("Chatbot funcionando");
+});
+
+app.get("/health", async (req, res) => {
+  try {
+    await db.query("SELECT 1");
+    res.json({ status: "ok", db: "connected", uptime: process.uptime() });
+  } catch {
+    res.status(503).json({ status: "error", db: "disconnected" });
+  }
 });
 
 app.get("/webhook", (req, res) => {
@@ -68,7 +86,7 @@ app.get("/webhook", (req, res) => {
 const recentMessages = new Map();
 const DEDUPLICATION_WINDOW_MS = 3000; // 3 seconds (catch true duplicate API calls only)
 
-app.post("/webhook", async (req, res) => {
+app.post("/webhook", webhookLimiter, async (req, res) => {
   console.log("=== WEBHOOK POST START ===");
   console.log("Body keys:", Object.keys(req.body || {}));
   

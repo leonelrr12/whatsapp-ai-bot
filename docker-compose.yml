@@ -1,4 +1,20 @@
 services:
+  nginx:
+    image: nginx:alpine
+    container_name: chatbot_nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - chatbot_network
+
   ollama:
     image: ollama/ollama
     container_name: ollama
@@ -7,27 +23,37 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-      # Añadimos esta línea para pasar el Modelfile al contenedor
       - ./Modelfile:/tmp/Modelfile
     networks:
       - chatbot_network
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   backend:
     build: ./backend
     container_name: chatbot_backend
     restart: always
     depends_on:
-      - ollama
+      ollama:
+        condition: service_started
     env_file:
       - .env
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     networks:
       - chatbot_network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
 volumes:
   ollama_data:
-
 
 networks:
   chatbot_network:
