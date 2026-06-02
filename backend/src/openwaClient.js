@@ -63,8 +63,8 @@ async function registerWebhook(sessionId, webhookUrl) {
   );
 }
 
-async function sendWhatsAppMessage(to, text) {
-  const chatId = `${to}@c.us`;
+async function sendWhatsAppMessage(to, text, chatId) {
+  if (!chatId) chatId = `${to}@c.us`;
   try {
     if (!cachedSessionId) await getOrCreateSession();
     await retryWithBackoff(async () => {
@@ -88,8 +88,8 @@ async function sendWhatsAppMessage(to, text) {
   }
 }
 
-async function sendImage(to, imageUrl, caption) {
-  const chatId = `${to}@c.us`;
+async function sendImage(to, imageUrl, caption, chatId) {
+  if (!chatId) chatId = `${to}@c.us`;
   try {
     if (!cachedSessionId) await getOrCreateSession();
     await retryWithBackoff(async () => {
@@ -103,7 +103,7 @@ async function sendImage(to, imageUrl, caption) {
     if (error.response?.status === 404) {
       cachedSessionId = null;
       await getOrCreateSession();
-      return sendImage(to, imageUrl, caption);
+      return sendImage(to, imageUrl, caption, chatId);
     }
     console.error(
       "Error enviando imagen WhatsApp:",
