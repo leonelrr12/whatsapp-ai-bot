@@ -102,7 +102,7 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
     }
 
     if (body.event !== "message.received") {
-      console.log("Evento ignorado:", body.event);
+      console.log("Evento ignorado:", body.event, body.data?.status || "");
       return res.sendStatus(200);
     }
 

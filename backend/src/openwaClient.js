@@ -95,13 +95,6 @@ async function sendWhatsAppMessage(to, text, chatId) {
     throw error;
   }
 }
-    console.error(
-      "Error enviando mensaje WhatsApp:",
-      error.response?.data || error.message,
-    );
-    throw error;
-  }
-}
 
 async function sendImage(to, imageUrl, caption, chatId) {
   if (!chatId) chatId = `${to}@c.us`;
