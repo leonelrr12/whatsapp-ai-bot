@@ -15,6 +15,37 @@ services:
     networks:
       - chatbot_network
 
+  openwa-api:
+    build: ./openwa
+    container_name: openwa-api
+    restart: unless-stopped
+    env_file: ./openwa/.env
+    ports:
+      - "2785:2785"
+    volumes:
+      - openwa-data:/app/data
+    networks:
+      - chatbot_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:2785/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  openwa-dashboard:
+    build:
+      context: ./openwa/dashboard
+      dockerfile: Dockerfile.traefik
+    container_name: openwa-dashboard
+    restart: unless-stopped
+    ports:
+      - "2886:80"
+    depends_on:
+      - openwa-api
+    networks:
+      - chatbot_network
+
   ollama:
     image: ollama/ollama
     container_name: ollama
@@ -39,6 +70,8 @@ services:
     depends_on:
       ollama:
         condition: service_started
+      openwa-api:
+        condition: service_healthy
     env_file:
       - .env
     expose:
@@ -54,6 +87,7 @@ services:
 
 volumes:
   ollama_data:
+  openwa-data:
 
 networks:
   chatbot_network:

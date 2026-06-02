@@ -3,7 +3,7 @@ const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 
 const { askAI } = require("./ai");
-const { sendWhatsAppMessage } = require("./whatsapp");
+const { sendWhatsAppMessage, sendImage } = require("./whatsapp");
 const db = require("./db");
 
 const {
@@ -15,20 +15,20 @@ const {
 const { extractCustomerData } = require("./extractor");
 const { processMessage, WELCOME_MESSAGE, FLOW_STATES, resetFlow } = require("./flow");
 const { appendToGoogleSheet } = require("./googleSheets");
+const { initSession } = require("./openwaClient");
 
 const REQUIRED_ENV_VARS = [
   "PORT",
-  "VERIFY_TOKEN",
-  "BOT_PHONE_NUMBER",
   "OLLAMA_URL",
   "MODEL",
-  "WHATSAPP_PHONE_ID",
-  "WHATSAPP_TOKEN",
   "DB_HOST",
   "DB_PORT",
   "DB_USER",
   "DB_PASSWORD",
   "DB_NAME",
+  "OPENWA_API_URL",
+  "OPENWA_API_KEY",
+  "OPENWA_SESSION_NAME",
 ];
 
 const USE_AI = process.env.USE_AI === 'true';
@@ -71,100 +71,73 @@ app.get("/health", async (req, res) => {
   }
 });
 
-app.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-
-  if (mode && token === process.env.VERIFY_TOKEN) {
-    return res.status(200).send(challenge);
-  }
-
-  return res.sendStatus(403);
-});
-
-const recentMessages = new Map();
-const DEDUPLICATION_WINDOW_MS = 3000; // 3 seconds (catch true duplicate API calls only)
+const processedEvents = new Map();
+const IDEMPOTENCY_TTL = 24 * 60 * 60 * 1000;
 
 app.post("/webhook", webhookLimiter, async (req, res) => {
   console.log("=== WEBHOOK POST START ===");
-  console.log("Body keys:", Object.keys(req.body || {}));
-  
+
   try {
     const body = req.body;
-    
-    if (!body.entry || !body.entry[0]) {
-      console.log("No entry, ignoring");
+    const idempotencyKey =
+      req.headers["x-openwa-idempotency-key"] ||
+      body.idempotencyKey;
+
+    if (idempotencyKey && processedEvents.has(idempotencyKey)) {
+      console.log("Evento duplicado ignorado:", idempotencyKey);
       return res.sendStatus(200);
     }
 
-    const value = body.entry[0].changes?.[0]?.value;
-    
-    if (!value?.messages || !value.messages[0]) {
-      console.log("No messages in value, ignoring");
-      return res.sendStatus(200);
+    if (idempotencyKey) {
+      processedEvents.set(idempotencyKey, Date.now());
     }
 
-    const message = value.messages[0];
-    console.log("Message:", message);
-
-    const from = message.from;
-    const text = message.text?.body || message.text?.message;
-    const image = message.image;
-    const timestamp = parseInt(message.timestamp) || Date.now();
-    
-    console.log("Message type:", message.type);
-    console.log("Has image:", !!image);
-    
-    // Deduplication: include flow state to avoid blocking same text at different stages
-    const currentCustomer = await getCustomer(from);
-    const flowState = currentCustomer?.flow_state || 'new';
-    const dedupKey = `${from}:${text}:${flowState}:${message.id}`;
-    
-    const now = Date.now();
-    if (recentMessages.has(dedupKey)) {
-      const lastTime = recentMessages.get(dedupKey);
-      if (now - lastTime < DEDUPLICATION_WINDOW_MS) {
-        console.log("Duplicate message ignored:", dedupKey);
-        return res.sendStatus(200);
-      }
-    }
-    recentMessages.set(dedupKey, now);
-
-    // Cleanup old entries
-    if (recentMessages.size > 1000) {
-      for (const [key, time] of recentMessages.entries()) {
-        if (now - time > DEDUPLICATION_WINDOW_MS * 2) {
-          recentMessages.delete(key);
+    if (processedEvents.size > 10000) {
+      const now = Date.now();
+      for (const [key, time] of processedEvents.entries()) {
+        if (now - time > IDEMPOTENCY_TTL) {
+          processedEvents.delete(key);
         }
       }
     }
 
-    console.log("=== MESSAGE RECEIVED ===");
-    console.log("From:", from, "Text:", text, "Type:", message.type);
+    if (body.event !== "message.received") {
+      console.log("Evento ignorado:", body.event);
+      return res.sendStatus(200);
+    }
+
+    const data = body.data;
+    if (!data || data.fromMe) {
+      console.log("Mensaje propio o vacío, ignorando");
+      return res.sendStatus(200);
+    }
+
+    const from = data.from.replace(/@c\.us$/, "").replace(/@s\.whatsapp\.net$/, "");
+    const text = data.body || "";
+    const msgType = data.type || "chat";
+    const hasMedia = data.hasMedia || false;
 
     res.sendStatus(200);
 
-    // Handle image messages (recibo de luz)
-    if (message.type === 'image' && image) {
-      const imageUrl = `https://graph.facebook.com/v19.0/${image.id}/picture?access_token=${process.env.WHATSAPP_TOKEN}`;
-      console.log("Image received:", image.id);
+    console.log("=== MESSAGE RECEIVED ===");
+    console.log("From:", from, "Text:", text, "Type:", msgType);
+
+    if (msgType === "image" && hasMedia) {
+      console.log("Image received:", data.id);
 
       await db.query(
         `INSERT INTO messages(phone, message, image_url)
          VALUES($1, $2, $3)`,
-        [from, `[Imagen: ${image.id}]`, imageUrl],
+        [from, `[Imagen: ${data.id}]`, data.media?.url || ""],
       );
 
       await createCustomer(from);
-
-      // Get current flow state before updating
       const customer = await getCustomer(from);
-      const currentState = customer?.flow_state || '';
+      const currentState = customer?.flow_state || "";
 
-      if (currentState === 'image') {
-        await updateCustomerMemory(from, 'receipt_image', imageUrl);
-        const flowResult = await processMessage(from, 'imagen_recibida', USE_AI);
+      if (currentState === "image") {
+        await updateCustomerMemory(from, "receipt_image", data.media?.url || "");
+        const flowResult = await processMessage(from, "imagen_recibida", USE_AI);
         await sendWhatsAppMessage(from, flowResult.text);
         await db.query(
           `INSERT INTO messages(phone, message)
@@ -179,6 +152,11 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
       return;
     }
 
+    if (!text) {
+      console.log("Mensaje sin texto, ignorando");
+      return;
+    }
+
     await db.query(
       `INSERT INTO messages(phone, message)
        VALUES($1, $2)`,
@@ -186,20 +164,17 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
     );
 
     await createCustomer(from);
-
     const customer = await getCustomer(from);
-    
-    // Check if user wants to reset or start over
-    if (text && (text.toLowerCase().includes('reiniciar') || text.toLowerCase().includes('empezar de nuevo'))) {
-      await updateCustomerMemory(from, 'submitted', 'false');
+
+    if (text && (text.toLowerCase().includes("reiniciar") || text.toLowerCase().includes("empezar de nuevo"))) {
+      await updateCustomerMemory(from, "submitted", "false");
       await resetFlow(from);
       await sendWhatsAppMessage(from, WELCOME_MESSAGE);
       console.log("=== FLOW RESET ===");
       return;
     }
-    
-    // Check if AI mode is enabled and user explicitly asks for it
-    if (USE_AI && text && (text.toLowerCase().includes('hablar con ia') || text.toLowerCase().includes('hablar con人工'))) {
+
+    if (USE_AI && text && (text.toLowerCase().includes("hablar con ia") || text.toLowerCase().includes("hablar con人工"))) {
       const aiResponse = await askAI(text, customer);
       await sendWhatsAppMessage(from, aiResponse);
       await db.query(
@@ -210,10 +185,9 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
       console.log("=== AI MODE ===");
       return;
     }
-    
-    // Use flow-based responses (no AI)
+
     const flowResult = await processMessage(from, text, USE_AI);
-    
+
     if (flowResult.useAI && USE_AI) {
       const aiResponse = await askAI(text, customer);
       await sendWhatsAppMessage(from, aiResponse);
@@ -231,13 +205,11 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
       );
     }
 
-    // Send to Google Sheets when flow completes (only once per customer)
-    console.log("Flow nextState:", flowResult.nextState);
-    if (flowResult.nextState === 'complete') {
+    if (flowResult.nextState === "complete") {
       const updatedCustomer = await getCustomer(from);
-      if (updatedCustomer && updatedCustomer.submitted !== 'true') {
+      if (updatedCustomer && updatedCustomer.submitted !== "true") {
         console.log("Flow completado, enviando a Google Sheets...");
-        await updateCustomerMemory(from, 'submitted', 'true');
+        await updateCustomerMemory(from, "submitted", "true");
         await appendToGoogleSheet(updatedCustomer);
       } else {
         console.log("Ya enviado a Google Sheets anteriormente, omitiendo");
@@ -250,6 +222,13 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT, "0.0.0.0", () => {
+app.listen(process.env.PORT, "0.0.0.0", async () => {
   console.log(`Servidor corriendo en puerto ${process.env.PORT}`);
+
+  const session = await initSession();
+  if (session && session.status === "CONNECTED") {
+    console.log("Bot listo para recibir mensajes ✅");
+  } else {
+    console.log("Escanea el QR del dashboard de OpenWA para conectar 📱");
+  }
 });
