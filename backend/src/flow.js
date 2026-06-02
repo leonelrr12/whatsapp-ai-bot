@@ -4,6 +4,7 @@ const FLOW_STATES = {
   GREETING: "greeting",
   SERVICE_INFO: "service_info",
   NAME: "name",
+  PHONE: "phone",
   CITY: "city",
   BUDGET: "budget",
   ADDITIONAL_INFO: "additional_info",
@@ -79,8 +80,14 @@ const RESPONSES = {
   },
   [FLOW_STATES.NAME]: {
     default: {
+      next: FLOW_STATES.PHONE,
+      text: "¡Gracias, {name}! 📱\n\n**¿Cuál es tu número de teléfono para contactarte?**\n\nEjemplo: +507 6000-0000",
+    },
+  },
+  [FLOW_STATES.PHONE]: {
+    default: {
       next: FLOW_STATES.CITY,
-      text: "¡Gracias, {name}! 📍\n\n**¿En qué ciudad o zona estás ubicado?**",
+      text: "Perfecto 📍\n\n**¿En qué ciudad o zona estás ubicado?**",
     },
   },
   [FLOW_STATES.CITY]: {
@@ -258,6 +265,9 @@ async function processMessage(phone, text, useAI = false) {
     const name = text.trim();
     responseText = responseText.replace("{name}", name);
     await updateCustomerMemory(phone, "name", name);
+  }
+  if (currentState === FLOW_STATES.PHONE) {
+    await updateCustomerMemory(phone, "contact_phone", text.trim());
   }
   if (currentState === FLOW_STATES.CITY) {
     await updateCustomerMemory(phone, "city", text.trim());

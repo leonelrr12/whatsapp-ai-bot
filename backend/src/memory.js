@@ -20,6 +20,7 @@ async function createCustomer(phone) {
 
 const ALLOWED_FIELDS = Object.freeze([
   'name',
+  'contact_phone',
   'service_interest',
   'budget',
   'city',
