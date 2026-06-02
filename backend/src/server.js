@@ -132,11 +132,11 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
       const imageUrl = `/uploads/${fileName}`;
 
       if (mediaData) {
-        const filePath = path.join(__dirname, "../../uploads", fileName);
+        const filePath = path.join(process.cwd(), "uploads", fileName);
         const imgBuffer = Buffer.from(mediaData, "base64");
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
         fs.writeFileSync(filePath, imgBuffer);
-        console.log("Image saved:", imageUrl);
+        console.log("Image saved:", imageUrl, "->", filePath);
       }
 
       await db.query(
