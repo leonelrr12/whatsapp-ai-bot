@@ -74,8 +74,10 @@ services:
         condition: service_healthy
     env_file:
       - .env
-    expose:
-      - "3000"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./backend/uploads:/app/uploads
     networks:
       - chatbot_network
     healthcheck:

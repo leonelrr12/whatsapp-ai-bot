@@ -19,8 +19,7 @@ async function appendToGoogleSheet(customer) {
     const data = {
       origen: "WS",
       fechaActual: new Date().toISOString(),
-      telefono: customer.phone || "",
-      celu_contacto: customer.contact_phone || "",
+      telefono: customer.contact_phone || "",
       nombre: customer.name || "",
       recibo: customer.receipt_image || "",
       monto_rec: customer.budget || "",
