@@ -1,6 +1,8 @@
 const express = require("express");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
+const fs = require("fs");
+const path = require("path");
 
 const { askAI } = require("./ai");
 const { sendWhatsAppMessage, sendImage } = require("./whatsapp");
@@ -57,6 +59,7 @@ const webhookLimiter = rateLimit({
 
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
+app.use("/uploads", express.static("uploads"));
 
 app.get("/", (req, res) => {
   res.send("Chatbot funcionando");
@@ -123,8 +126,18 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
     if (hasMedia) console.log("Media:", JSON.stringify(data.media));
 
     if (msgType === "image") {
-      const imageUrl = data.media?.url || "";
-      console.log("Image received:", data.id, "URL:", imageUrl.substring(0, 80));
+      const mediaData = data.media?.data || "";
+      const ext = data.media?.mimetype === "image/png" ? "png" : "jpg";
+      const fileName = `receipt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      const imageUrl = `/uploads/${fileName}`;
+
+      if (mediaData) {
+        const filePath = path.join(__dirname, "../../uploads", fileName);
+        const imgBuffer = Buffer.from(mediaData, "base64");
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, imgBuffer);
+        console.log("Image saved:", imageUrl);
+      }
 
       await db.query(
         `INSERT INTO messages(phone, message, image_url)
