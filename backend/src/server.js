@@ -145,6 +145,15 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
            VALUES($1, $2)`,
           [from, flowResult.text],
         );
+
+        if (flowResult.nextState === "complete") {
+          const updatedCustomer = await getCustomer(from);
+          if (updatedCustomer && updatedCustomer.submitted !== "true") {
+            console.log("Flow completado via imagen, enviando a Google Sheets...");
+            await updateCustomerMemory(from, "submitted", "true");
+            await appendToGoogleSheet(updatedCustomer);
+          }
+        }
       } else {
         await sendWhatsAppMessage(from, "¡Gracias por compartir la imagen! 📸 Un asesor la revisará pronto.", chatId, sessionId);
       }

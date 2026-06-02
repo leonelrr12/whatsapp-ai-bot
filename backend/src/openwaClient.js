@@ -157,6 +157,22 @@ async function startSession(sessionId) {
   }
 }
 
+async function registerWebhooksForAllSessions() {
+  try {
+    const { data } = await axios.get(`${API_URL}/api/sessions`, {
+      headers: headers(),
+    });
+    if (!Array.isArray(data)) return;
+    for (const s of data) {
+      cachedSessionId = s.id;
+      await ensureWebhookRegistered();
+    }
+    console.log(`Webhooks verificados para ${data.length} sesión(es)`);
+  } catch (error) {
+    console.error("Error registrando webhooks:", error.message);
+  }
+}
+
 async function initSession() {
   console.log("=== OPENWA STARTUP ===");
 
@@ -170,11 +186,10 @@ async function initSession() {
       await startSession(session.id);
     }
 
-    await ensureWebhookRegistered();
+    await registerWebhooksForAllSessions();
 
     if (status !== "CONNECTED") {
       console.log("📱 Escanea el QR desde el endpoint /qr de OpenWA");
-      startStatusPolling();
     } else {
       console.log("✅ Bot conectado y listo");
     }
