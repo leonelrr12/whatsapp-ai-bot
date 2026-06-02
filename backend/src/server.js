@@ -79,19 +79,16 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
 
   try {
     const body = req.body;
-    const idempotencyKey =
-      req.headers["x-openwa-idempotency-key"] ||
-      body.idempotencyKey;
 
-    if (idempotencyKey && processedEvents.has(idempotencyKey)) {
-      console.log("Evento duplicado ignorado:", idempotencyKey);
+    // Dedup by deliveryId only (unique per delivery)
+    const deliveryId = body.deliveryId || req.headers["x-openwa-delivery-id"];
+
+    if (deliveryId && processedEvents.has(deliveryId)) {
+      console.log("Evento duplicado ignorado:", deliveryId);
       return res.sendStatus(200);
     }
 
-    if (idempotencyKey) {
-      processedEvents.set(idempotencyKey, Date.now());
-    }
-
+    if (deliveryId) processedEvents.set(deliveryId, Date.now());
     if (processedEvents.size > 10000) {
       const now = Date.now();
       for (const [key, time] of processedEvents.entries()) {
@@ -114,6 +111,7 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
 
     const from = data.from.replace(/@[^@]+$/, "");
     const chatId = data.from;
+    const sessionId = body.sessionId;
     const text = data.body || "";
     const msgType = data.type || "chat";
     const hasMedia = data.hasMedia || false;
@@ -121,15 +119,17 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
     res.sendStatus(200);
 
     console.log("=== MESSAGE RECEIVED ===");
-    console.log("From:", from, "Text:", text, "Type:", msgType);
+    console.log("From:", from, "Text:", text, "Type:", msgType, "HasMedia:", hasMedia);
+    if (hasMedia) console.log("Media:", JSON.stringify(data.media));
 
-    if (msgType === "image" && hasMedia) {
-      console.log("Image received:", data.id);
+    if (msgType === "image") {
+      const imageUrl = data.media?.url || "";
+      console.log("Image received:", data.id, "URL:", imageUrl.substring(0, 80));
 
       await db.query(
         `INSERT INTO messages(phone, message, image_url)
          VALUES($1, $2, $3)`,
-        [from, `[Imagen: ${data.id}]`, data.media?.url || ""],
+        [from, `[Imagen: ${data.id}]`, imageUrl],
       );
 
       await createCustomer(from);
@@ -137,16 +137,16 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
       const currentState = customer?.flow_state || "";
 
       if (currentState === "image") {
-        await updateCustomerMemory(from, "receipt_image", data.media?.url || "");
+        await updateCustomerMemory(from, "receipt_image", imageUrl);
         const flowResult = await processMessage(from, "imagen_recibida", USE_AI);
-        await sendWhatsAppMessage(from, flowResult.text, chatId);
+        await sendWhatsAppMessage(from, flowResult.text, chatId, sessionId);
         await db.query(
           `INSERT INTO messages(phone, message)
            VALUES($1, $2)`,
           [from, flowResult.text],
         );
       } else {
-        await sendWhatsAppMessage(from, "¡Gracias por compartir la imagen! 📸 Un asesor la revisará pronto.", chatId);
+        await sendWhatsAppMessage(from, "¡Gracias por compartir la imagen! 📸 Un asesor la revisará pronto.", chatId, sessionId);
       }
 
       console.log("=== IMAGE PROCESSED OK ===");
@@ -170,14 +170,14 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
     if (text && (text.toLowerCase().includes("reiniciar") || text.toLowerCase().includes("empezar de nuevo"))) {
       await updateCustomerMemory(from, "submitted", "false");
       await resetFlow(from);
-      await sendWhatsAppMessage(from, WELCOME_MESSAGE, chatId);
+      await sendWhatsAppMessage(from, WELCOME_MESSAGE, chatId, sessionId);
       console.log("=== FLOW RESET ===");
       return;
     }
 
     if (USE_AI && text && (text.toLowerCase().includes("hablar con ia") || text.toLowerCase().includes("hablar con人工"))) {
       const aiResponse = await askAI(text, customer);
-      await sendWhatsAppMessage(from, aiResponse, chatId);
+      await sendWhatsAppMessage(from, aiResponse, chatId, sessionId);
       await db.query(
         `INSERT INTO messages(phone, message)
          VALUES($1, $2)`,
@@ -191,7 +191,7 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
 
     if (flowResult.useAI && USE_AI) {
       const aiResponse = await askAI(text, customer);
-      await sendWhatsAppMessage(from, aiResponse, chatId);
+      await sendWhatsAppMessage(from, aiResponse, chatId, sessionId);
       await db.query(
         `INSERT INTO messages(phone, message)
          VALUES($1, $2)`,
@@ -199,7 +199,7 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
       );
     } else {
       console.log("Enviando respuesta a", from, "con chatId", chatId);
-      await sendWhatsAppMessage(from, flowResult.text, chatId);
+      await sendWhatsAppMessage(from, flowResult.text, chatId, sessionId);
       console.log("Respuesta enviada OK");
       await db.query(
         `INSERT INTO messages(phone, message)

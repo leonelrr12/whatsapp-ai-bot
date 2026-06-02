@@ -63,60 +63,49 @@ async function registerWebhook(sessionId, webhookUrl) {
   );
 }
 
-async function sendWhatsAppMessage(to, text, chatId) {
+async function sendToSession(sessionId, endpoint, payload) {
+  if (!cachedSessionId && !sessionId) await getOrCreateSession();
+  const sid = sessionId || cachedSessionId;
+  await retryWithBackoff(async () => {
+    await axios.post(
+      `${API_URL}/api/sessions/${sid}/${endpoint}`,
+      payload,
+      { headers: headers() },
+    );
+  });
+}
+
+async function sendWhatsAppMessage(to, text, chatId, sessionId) {
   if (!chatId) chatId = `${to}@c.us`;
   try {
-    if (!cachedSessionId) await getOrCreateSession();
-    await retryWithBackoff(async () => {
-      await axios.post(
-        `${API_URL}/api/sessions/${cachedSessionId}/messages/send-text`,
-        { chatId, text },
-        { headers: headers() },
-      );
-    });
+    await sendToSession(sessionId, "messages/send-text", { chatId, text });
   } catch (error) {
     if (error.response?.status === 404) {
       cachedSessionId = null;
-      await getOrCreateSession();
-      return sendWhatsAppMessage(to, text, chatId);
+      return sendWhatsAppMessage(to, text, chatId, sessionId);
     }
-    // If chatId uses @lid, retry with @c.us
-    if (chatId.endsWith('@lid') && error.response?.status === 500) {
-      const fallbackChatId = `${to}@c.us`;
-      if (fallbackChatId !== chatId) {
-        console.log("Reintentando con @c.us en lugar de @lid");
-        return sendWhatsAppMessage(to, text, fallbackChatId);
+    if (chatId.endsWith("@lid") && error.response?.status === 500) {
+      const fallback = `${to}@c.us`;
+      if (fallback !== chatId) {
+        console.log("Reintentando con @c.us");
+        return sendWhatsAppMessage(to, text, fallback, sessionId);
       }
     }
-    console.error(
-      "Error enviando mensaje WhatsApp:",
-      error.response?.data || error.message,
-    );
+    console.error("Error enviando WhatsApp:", error.response?.data || error.message);
     throw error;
   }
 }
 
-async function sendImage(to, imageUrl, caption, chatId) {
+async function sendImage(to, imageUrl, caption, chatId, sessionId) {
   if (!chatId) chatId = `${to}@c.us`;
   try {
-    if (!cachedSessionId) await getOrCreateSession();
-    await retryWithBackoff(async () => {
-      await axios.post(
-        `${API_URL}/api/sessions/${cachedSessionId}/messages/send-image`,
-        { chatId, image: { url: imageUrl }, caption },
-        { headers: headers() },
-      );
-    });
+    await sendToSession(sessionId, "messages/send-image", { chatId, image: { url: imageUrl }, caption });
   } catch (error) {
     if (error.response?.status === 404) {
       cachedSessionId = null;
-      await getOrCreateSession();
-      return sendImage(to, imageUrl, caption, chatId);
+      return sendImage(to, imageUrl, caption, chatId, sessionId);
     }
-    console.error(
-      "Error enviando imagen WhatsApp:",
-      error.response?.data || error.message,
-    );
+    console.error("Error enviando imagen:", error.response?.data || error.message);
     throw error;
   }
 }
