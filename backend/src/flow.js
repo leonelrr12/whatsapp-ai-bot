@@ -81,7 +81,7 @@ const RESPONSES = {
   [FLOW_STATES.NAME]: {
     default: {
       next: FLOW_STATES.PHONE,
-      text: "¡Gracias, {name}! 📱\n\n**¿Cuál es tu número de teléfono para contactarte?**\n\nEjemplo: +507 6000-0000",
+      text: "¡Gracias, {name}! 📱\n\n**¿Cuál es tu número de teléfono para contactarte?**\n\n*(Sin el prefijo +507, solo los 8 dígitos)*\n\nEjemplo: 6000-0000",
     },
   },
   [FLOW_STATES.PHONE]: {
@@ -267,7 +267,9 @@ async function processMessage(phone, text, useAI = false) {
     await updateCustomerMemory(phone, "name", name);
   }
   if (currentState === FLOW_STATES.PHONE) {
-    await updateCustomerMemory(phone, "contact_phone", text.trim());
+    const rawPhone = text.trim().replace(/[^0-9]/g, "");
+    const fullPhone = rawPhone.startsWith("507") ? `+${rawPhone}` : `+507${rawPhone}`;
+    await updateCustomerMemory(phone, "contact_phone", fullPhone);
   }
   if (currentState === FLOW_STATES.CITY) {
     await updateCustomerMemory(phone, "city", text.trim());
