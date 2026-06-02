@@ -33,19 +33,6 @@ services:
       retries: 3
       start_period: 30s
 
-  openwa-dashboard:
-    build:
-      context: ./openwa/dashboard
-      dockerfile: Dockerfile.traefik
-    container_name: openwa-dashboard
-    restart: unless-stopped
-    ports:
-      - "2886:80"
-    depends_on:
-      - openwa-api
-    networks:
-      - chatbot_network
-
   ollama:
     image: ollama/ollama
     container_name: ollama

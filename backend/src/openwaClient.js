@@ -19,9 +19,9 @@ async function getOrCreateSession() {
     headers: headers(),
   });
 
-  if (!data.success) throw new Error("Failed to list sessions");
+  if (!Array.isArray(data)) throw new Error("Unexpected response from sessions list");
 
-  let session = data.data.find((s) => s.name === SESSION_NAME);
+  let session = data.find((s) => s.name === SESSION_NAME);
 
   if (!session) {
     const { data: created } = await axios.post(
@@ -29,8 +29,8 @@ async function getOrCreateSession() {
       { name: SESSION_NAME },
       { headers: headers() },
     );
-    if (!created.success) throw new Error("Failed to create session");
-    session = created.data;
+    if (!created || !created.id) throw new Error("Failed to create session");
+    session = created;
   }
 
   cachedSessionId = session.id;
@@ -38,32 +38,22 @@ async function getOrCreateSession() {
 }
 
 async function getSessionStatus() {
-  if (!cachedSessionId) {
-    await getOrCreateSession();
-  }
+  if (!cachedSessionId) await getOrCreateSession();
 
   try {
     const { data } = await axios.get(
       `${API_URL}/api/sessions/${cachedSessionId}`,
       { headers: headers() },
     );
-    return data.data?.status || "UNKNOWN";
+    return data?.status || "UNKNOWN";
   } catch {
     cachedSessionId = null;
     return "UNKNOWN";
   }
 }
 
-async function getSessionQR(sessionId) {
-  const { data } = await axios.get(
-    `${API_URL}/api/sessions/${sessionId}/qr`,
-    { headers: headers() },
-  );
-  return data.data;
-}
-
 async function registerWebhook(sessionId, webhookUrl) {
-  const { data } = await axios.post(
+  await axios.post(
     `${API_URL}/api/sessions/${sessionId}/webhooks`,
     {
       url: webhookUrl,
@@ -71,7 +61,6 @@ async function registerWebhook(sessionId, webhookUrl) {
     },
     { headers: headers() },
   );
-  return data;
 }
 
 async function sendWhatsAppMessage(to, text) {
@@ -125,7 +114,7 @@ async function sendImage(to, imageUrl, caption) {
 }
 
 async function ensureWebhookRegistered() {
-  const webhookUrl = `http://backend:${process.env.PORT || 3000}/webhook`;
+  const webhookUrl = process.env.WEBHOOK_URL || `http://backend:${process.env.PORT || 3000}/webhook`;
 
   try {
     const { data: existing } = await axios.get(
@@ -133,8 +122,8 @@ async function ensureWebhookRegistered() {
       { headers: headers() },
     );
 
-    if (existing.success) {
-      const alreadyRegistered = existing.data?.some(
+    if (Array.isArray(existing)) {
+      const alreadyRegistered = existing.some(
         (w) => w.url === webhookUrl && w.active !== false,
       );
       if (alreadyRegistered) {
@@ -157,6 +146,20 @@ async function ensureWebhookRegistered() {
   }
 }
 
+async function startSession(sessionId) {
+  try {
+    const { data } = await axios.post(
+      `${API_URL}/api/sessions/${sessionId}/start`,
+      {},
+      { headers: headers() },
+    );
+    return data;
+  } catch (error) {
+    console.error("Error iniciando sesión:", error.response?.data || error.message);
+    return null;
+  }
+}
+
 async function initSession() {
   console.log("=== OPENWA STARTUP ===");
 
@@ -165,20 +168,15 @@ async function initSession() {
     const status = session.status || "UNKNOWN";
     console.log(`Session "${SESSION_NAME}" (${session.id}):`, status);
 
-    if (status !== "CONNECTED") {
-      console.log("Esperando escaneo QR...");
-      try {
-        const qr = await getSessionQR(session.id);
-        console.log("QR disponible. Ve al dashboard: http://<tu-servidor>:2886");
-      } catch {
-        console.log("QR no disponible aún. Ve al dashboard a escanear.");
-      }
+    if (status === "created" || status === "disconnected") {
+      console.log("Iniciando sesión...");
+      await startSession(session.id);
     }
 
     await ensureWebhookRegistered();
 
     if (status !== "CONNECTED") {
-      console.log("📱 Escanea el QR en el dashboard de OpenWA para conectar");
+      console.log("📱 Escanea el QR desde el endpoint /qr de OpenWA");
       startStatusPolling();
     } else {
       console.log("✅ Bot conectado y listo");
@@ -195,7 +193,6 @@ function startStatusPolling() {
   const interval = setInterval(async () => {
     try {
       const status = await getSessionStatus();
-      console.log("Status polling:", status);
       if (status === "CONNECTED") {
         console.log("✅ ¡Sesión conectada! Registrando webhook...");
         await ensureWebhookRegistered();
