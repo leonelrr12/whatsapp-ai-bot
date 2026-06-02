@@ -78,8 +78,23 @@ async function sendWhatsAppMessage(to, text, chatId) {
     if (error.response?.status === 404) {
       cachedSessionId = null;
       await getOrCreateSession();
-      return sendWhatsAppMessage(to, text);
+      return sendWhatsAppMessage(to, text, chatId);
     }
+    // If chatId uses @lid, retry with @c.us
+    if (chatId.endsWith('@lid') && error.response?.status === 500) {
+      const fallbackChatId = `${to}@c.us`;
+      if (fallbackChatId !== chatId) {
+        console.log("Reintentando con @c.us en lugar de @lid");
+        return sendWhatsAppMessage(to, text, fallbackChatId);
+      }
+    }
+    console.error(
+      "Error enviando mensaje WhatsApp:",
+      error.response?.data || error.message,
+    );
+    throw error;
+  }
+}
     console.error(
       "Error enviando mensaje WhatsApp:",
       error.response?.data || error.message,
