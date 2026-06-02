@@ -268,7 +268,13 @@ async function processMessage(phone, text, useAI = false) {
   }
   if (currentState === FLOW_STATES.PHONE) {
     const rawPhone = text.trim().replace(/[^0-9]/g, "");
-    const fullPhone = rawPhone.startsWith("507") ? `+${rawPhone}` : `+507${rawPhone}`;
+    if (rawPhone.length !== 8) {
+      return {
+        text: "❌ El número debe tener exactamente **8 dígitos** (sin el prefijo +507).\n\nEjemplo: 6000-0000\n\n**Intenta de nuevo:**",
+        nextState: currentState,
+      };
+    }
+    const fullPhone = `+507${rawPhone}`;
     await updateCustomerMemory(phone, "contact_phone", fullPhone);
   }
   if (currentState === FLOW_STATES.CITY) {
