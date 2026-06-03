@@ -11,6 +11,8 @@ WHATSAPP_PHONE_ID=
 # WHATSAPP_PHONE_ID=
 VERIFY_TOKEN=
 
+CRM_API_URL=http://172.20.0.1:3001
+
 OLLAMA_URL=http://ollama:11434
 # MODEL=phi3:mini
 MODEL=llama3:latest
@@ -27,6 +29,8 @@ DB_NAME=
 POSTGRES_USER=
 POSTGRES_DB=
 
-
+# Google Sheets (opcional)
+GOOGLE_SHEETS_ENABLED=false
+APPS_SCRIPT_URL=
 
 

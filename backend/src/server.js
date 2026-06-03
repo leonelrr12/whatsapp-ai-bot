@@ -17,6 +17,7 @@ const {
 const { extractCustomerData } = require("./extractor");
 const { processMessage, WELCOME_MESSAGE, FLOW_STATES, resetFlow } = require("./flow");
 const { appendToGoogleSheet } = require("./googleSheets");
+const { syncLeadToCRM } = require("./crmClient");
 const { initSession } = require("./openwaClient");
 
 const REQUIRED_ENV_VARS = [
@@ -129,7 +130,8 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
       const mediaData = data.media?.data || "";
       const ext = data.media?.mimetype === "image/png" ? "png" : "jpg";
       const fileName = `receipt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
-      const imageUrl = `/uploads/${fileName}`;
+      const baseUrl = process.env.APP_HOST || "";
+      const imageUrl = `${baseUrl}/uploads/${fileName}`;
 
       if (mediaData) {
         const filePath = path.join(process.cwd(), "uploads", fileName);
@@ -162,9 +164,12 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
         if (flowResult.nextState === "complete") {
           const updatedCustomer = await getCustomer(from);
           if (updatedCustomer && updatedCustomer.submitted !== "true") {
-            console.log("Flow completado via imagen, enviando a Google Sheets...");
+            console.log("Flow completado via imagen, sincronizando...");
             await updateCustomerMemory(from, "submitted", "true");
-            await appendToGoogleSheet(updatedCustomer);
+            await syncLeadToCRM(updatedCustomer);
+            if (process.env.GOOGLE_SHEETS_ENABLED === 'true') {
+              await appendToGoogleSheet(updatedCustomer);
+            }
           }
         }
       } else {
@@ -233,11 +238,14 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
     if (flowResult.nextState === "complete") {
       const updatedCustomer = await getCustomer(from);
       if (updatedCustomer && updatedCustomer.submitted !== "true") {
-        console.log("Flow completado, enviando a Google Sheets...");
+        console.log("Flow completado, sincronizando...");
         await updateCustomerMemory(from, "submitted", "true");
-        await appendToGoogleSheet(updatedCustomer);
+        await syncLeadToCRM(updatedCustomer);
+        if (process.env.GOOGLE_SHEETS_ENABLED === 'true') {
+          await appendToGoogleSheet(updatedCustomer);
+        }
       } else {
-        console.log("Ya enviado a Google Sheets anteriormente, omitiendo");
+        console.log("Ya procesado anteriormente, omitiendo");
       }
     }
 
