@@ -1,7 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-const rateLimit = require("express-rate-limit");
-const fs = require("fs");
 const path = require("path");
 
 const { askAI } = require("./ai");
@@ -18,7 +16,7 @@ const { extractCustomerData } = require("./extractor");
 const { processMessage, WELCOME_MESSAGE, FLOW_STATES, resetFlow } = require("./flow");
 const { appendToGoogleSheet } = require("./googleSheets");
 const { syncLeadToCRM } = require("./crmClient");
-const { initSession } = require("./openwaClient");
+const { initSession, onMessage, getAllSessions, getSessionQR } = require("./baileysClient");
 
 const REQUIRED_ENV_VARS = [
   "PORT",
@@ -29,9 +27,7 @@ const REQUIRED_ENV_VARS = [
   "DB_USER",
   "DB_PASSWORD",
   "DB_NAME",
-  "OPENWA_API_URL",
-  "OPENWA_API_KEY",
-  "OPENWA_SESSION_NAME",
+  "APP_HOST",
 ];
 
 const USE_AI = process.env.USE_AI === 'true';
@@ -50,14 +46,6 @@ validateEnvVars();
 
 const app = express();
 
-const webhookLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 30,
-  message: { error: "Demasiadas solicitudes, intenta de nuevo más tarde" },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 app.use("/uploads", express.static("uploads"));
@@ -75,76 +63,55 @@ app.get("/health", async (req, res) => {
   }
 });
 
+// ====== Incoming Message Handler (replaces webhook logic) ======
+
 const processedEvents = new Map();
 const IDEMPOTENCY_TTL = 24 * 60 * 60 * 1000;
 
-app.post("/webhook", webhookLimiter, async (req, res) => {
-  console.log("=== WEBHOOK POST START ===");
+async function handleIncomingMessage(msg) {
+  // msg format: { from, chatId, sessionId, text, type, hasMedia, media, id, fromMe, rawMessage }
+  const tStart = Date.now();
 
   try {
-    const body = req.body;
-
-    // Dedup by deliveryId only (unique per delivery)
-    const deliveryId = body.deliveryId || req.headers["x-openwa-delivery-id"];
-
-    if (deliveryId && processedEvents.has(deliveryId)) {
-      console.log("Evento duplicado ignorado:", deliveryId);
-      return res.sendStatus(200);
+    // Dedup by message id
+    const msgId = msg.id;
+    if (msgId && processedEvents.has(msgId)) {
+      console.log("Evento duplicado ignorado:", msgId);
+      return;
     }
 
-    if (deliveryId) processedEvents.set(deliveryId, Date.now());
+    if (msgId) processedEvents.set(msgId, Date.now());
     if (processedEvents.size > 10000) {
       const now = Date.now();
       for (const [key, time] of processedEvents.entries()) {
-        if (now - time > IDEMPOTENCY_TTL) {
-          processedEvents.delete(key);
-        }
+        if (now - time > IDEMPOTENCY_TTL) processedEvents.delete(key);
       }
     }
 
-    if (body.event !== "message.received") {
-      console.log("Evento ignorado:", body.event, body.data?.status || "");
-      return res.sendStatus(200);
+    if (msg.fromMe) {
+      console.log("Mensaje propio, ignorando");
+      return;
     }
 
-    const data = body.data;
-    if (!data || data.fromMe) {
-      console.log("Mensaje propio o vacío, ignorando");
-      return res.sendStatus(200);
-    }
-
-    const from = data.from.replace(/@[^@]+$/, "");
-    const chatId = data.from;
-    const sessionId = body.sessionId;
-    const text = data.body || "";
-    const msgType = data.type || "chat";
-    const hasMedia = data.hasMedia || false;
-
-    res.sendStatus(200);
+    const from = msg.from;
+    const chatId = msg.chatId;
+    const sessionId = msg.sessionId;
+    const text = msg.text || "";
+    const msgType = msg.type || "chat";
+    const hasMedia = msg.hasMedia || false;
 
     console.log("=== MESSAGE RECEIVED ===");
     console.log("From:", from, "Text:", text, "Type:", msgType, "HasMedia:", hasMedia);
-    if (hasMedia) console.log("Media:", JSON.stringify(data.media));
+    if (hasMedia && msg.media) console.log("Media URL:", msg.media.url);
 
     if (msgType === "image") {
-      const mediaData = data.media?.data || "";
-      const ext = data.media?.mimetype === "image/png" ? "png" : "jpg";
-      const fileName = `receipt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
-      const baseUrl = process.env.APP_HOST || "";
-      const imageUrl = `${baseUrl}/uploads/${fileName}`;
-
-      if (mediaData) {
-        const filePath = path.join(process.cwd(), "uploads", fileName);
-        const imgBuffer = Buffer.from(mediaData, "base64");
-        fs.mkdirSync(path.dirname(filePath), { recursive: true });
-        fs.writeFileSync(filePath, imgBuffer);
-        console.log("Image saved:", imageUrl, "->", filePath);
-      }
+      const imageUrl = msg.media?.url || "";
+      const fileName = msg.media?.fileName || `receipt_${Date.now()}.jpg`;
 
       await db.query(
         `INSERT INTO messages(phone, message, image_url)
          VALUES($1, $2, $3)`,
-        [from, `[Imagen: ${data.id}]`, imageUrl],
+        [from, `[Imagen: ${msgId}]`, imageUrl],
       );
 
       await createCustomer(from);
@@ -249,19 +216,86 @@ app.post("/webhook", webhookLimiter, async (req, res) => {
       }
     }
 
-    console.log("=== MESSAGE PROCESSED OK ===");
+    console.log(`=== MESSAGE PROCESSED OK (${Date.now() - tStart}ms) ===`);
   } catch (error) {
     console.error("Error:", error.message, error.stack);
   }
+}
+
+// Register the message handler with Baileys
+onMessage(handleIncomingMessage);
+
+// ====== Baileys Session Endpoints ======
+
+// GET /sessions - list all WhatsApp sessions and their status
+app.get("/sessions", (req, res) => {
+  const sessions = getAllSessions();
+  res.json(sessions);
 });
+
+// GET /qr/:sessionName - get QR code for a session (HTML page for scanning)
+app.get("/qr/:sessionName", (req, res) => {
+  const sessionName = req.params.sessionName;
+  const qr = getSessionQR(sessionName);
+
+  if (!qr) {
+    return res.status(404).send(`<html><body>
+      <h2>QR no disponible para "${sessionName}"</h2>
+      <p>La sesión ya está conectada o el QR ha expirado.</p>
+      <p><a href="/sessions">Ver estado de sesiones</a></p>
+    </body></html>`);
+  }
+
+  // Render QR as HTML with auto-refresh
+  const QRCode = require("qrcode");
+  QRCode.toDataURL(qr, (err, url) => {
+    if (err) {
+      return res.status(500).send("Error generating QR");
+    }
+    res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Scan QR - ${sessionName}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f0f0f0; }
+    h2 { color: #333; }
+    .qr-box { background: white; padding: 30px; border-radius: 10px; display: inline-block; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    img { max-width: 300px; }
+    p { color: #666; margin-top: 20px; }
+    .refresh { color: #999; font-size: 12px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="qr-box">
+    <h2>📱 Escanea el QR para "${sessionName}"</h2>
+    <img src="${url}" alt="QR Code" />
+    <p>Abre WhatsApp &gt; Dispositivos Vinculados &gt; Vincular un Dispositivo</p>
+    <p class="refresh">Esta página se actualiza automáticamente cada 15 segundos</p>
+  </div>
+  <script>
+    setTimeout(() => location.reload(), 15000);
+  </script>
+</body>
+</html>`);
+  });
+});
+
+// ====== Startup ======
 
 app.listen(process.env.PORT, "0.0.0.0", async () => {
   console.log(`Servidor corriendo en puerto ${process.env.PORT}`);
 
-  const session = await initSession();
-  if (session && session.status === "CONNECTED") {
-    console.log("Bot listo para recibir mensajes ✅");
-  } else {
-    console.log("Escanea el QR del dashboard de OpenWA para conectar 📱");
+  // Start Baileys sessions
+  const result = await initSession();
+  const connected = result.sessions?.filter(s => s.connected).length || 0;
+  const total = result.sessions?.length || 0;
+
+  if (connected > 0) {
+    console.log(`✅ ${connected}/${total} sesiones WhatsApp conectadas - Bot listo`);
+  }
+  if (connected < total) {
+    console.log(`📱 ${total - connected} sesión(es) pendiente(s) de QR.`);
+    console.log(`   Abre GET /qr/:sessionName para escanear`);
   }
 });

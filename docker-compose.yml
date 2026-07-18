@@ -1,35 +1,4 @@
 services:
-  openwa-api:
-    build: ./openwa
-    container_name: openwa-api
-    restart: unless-stopped
-    env_file: ./openwa/.env
-    ports:
-      - "2785:2785"
-    volumes:
-      - openwa-data:/app/data
-    networks:
-      - chatbot_network
-    healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:2785/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  openwa-dashboard:
-    build:
-      context: ./openwa/dashboard
-      dockerfile: Dockerfile.traefik
-    container_name: openwa-dashboard
-    restart: unless-stopped
-    ports:
-      - "2886:80"
-    depends_on:
-      - openwa-api
-    networks:
-      - chatbot_network
-
   ollama:
     image: ollama/ollama
     container_name: ollama
@@ -51,9 +20,6 @@ services:
     build: ./backend
     container_name: chatbot_backend
     restart: always
-    depends_on:
-      openwa-api:
-        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file:
@@ -62,8 +28,10 @@ services:
       - "3000:3000"
     volumes:
       - ./backend/uploads:/app/uploads
+      - baileys-auth:/app/auth
     networks:
       - chatbot_network
+      - accion-comunitaria_default
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
       interval: 30s
@@ -79,20 +47,21 @@ services:
       - .env
     environment:
       - BACKEND_URL=http://backend:3000
-      - OPENWA_URL=http://openwa-api:2785
       - CHECK_INTERVAL=300
     volumes:
       - monitor-data:/data
     networks:
       - chatbot_network
     depends_on:
-      - openwa-api
+      - backend
 
 volumes:
   ollama_data:
-  openwa-data:
+  baileys-auth:
   monitor-data:
 
 networks:
   chatbot_network:
+    external: true
+  accion-comunitaria_default:
     external: true

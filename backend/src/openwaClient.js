@@ -111,7 +111,8 @@ async function sendImage(to, imageUrl, caption, chatId, sessionId) {
 }
 
 async function ensureWebhookRegistered() {
-  const webhookUrl = process.env.WEBHOOK_URL || `http://backend:${process.env.PORT || 3000}/webhook`;
+  const appHost = process.env.APP_HOST || `http://localhost:${process.env.PORT || 3000}`;
+  const webhookUrl = process.env.WEBHOOK_URL || `${appHost}/webhook`;
 
   try {
     const { data: existing } = await axios.get(
@@ -163,11 +164,13 @@ async function registerWebhooksForAllSessions() {
       headers: headers(),
     });
     if (!Array.isArray(data)) return;
-    for (const s of data) {
+    // Only register webhooks for our own session, not other bots
+    const ourSessions = data.filter((s) => s.name === SESSION_NAME);
+    for (const s of ourSessions) {
       cachedSessionId = s.id;
       await ensureWebhookRegistered();
     }
-    console.log(`Webhooks verificados para ${data.length} sesión(es)`);
+    console.log(`Webhooks verificados para ${ourSessions.length} sesión(es) ("${SESSION_NAME}")`);
   } catch (error) {
     console.error("Error registrando webhooks:", error.message);
   }

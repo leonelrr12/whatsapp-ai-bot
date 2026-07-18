@@ -9,8 +9,6 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://backend:3000";
-const OPENWA_URL = process.env.OPENWA_URL || "http://openwa-api:2785";
-const OPENWA_API_KEY = process.env.OPENWA_API_KEY;
 
 let state = {};
 
@@ -54,10 +52,9 @@ async function sendTelegram(message) {
   }
 }
 
-async function checkService(name, url, key) {
+async function checkService(name, url) {
   try {
-    const headers = key ? { "X-API-Key": key } : {};
-    const res = await axios.get(url, { headers, timeout: 8000 });
+    const res = await axios.get(url, { timeout: 8000 });
     return { ok: true, status: res.status, data: res.data };
   } catch (err) {
     return { ok: false, status: err.response?.status, error: err.message };
@@ -75,30 +72,19 @@ async function checkBackend() {
   };
 }
 
-async function checkOpenWA() {
-  const result = await checkService("openwa-api", `${OPENWA_URL}/api/health`, OPENWA_API_KEY);
-  if (result.ok) {
-    return { ok: true, detail: "API saludable" };
-  }
-  return { ok: false, detail: result.error };
-}
-
-async function checkSession() {
+async function checkBaileysSessions() {
   try {
-    const { data } = await axios.get(`${OPENWA_URL}/api/sessions`, {
-      headers: OPENWA_API_KEY ? { "X-API-Key": OPENWA_API_KEY } : {},
-      timeout: 8000,
-    });
+    const { data } = await axios.get(`${BACKEND_URL}/sessions`, { timeout: 8000 });
     if (!Array.isArray(data) || data.length === 0) {
-      return { ok: false, detail: "Sin sesiones" };
+      return { ok: false, detail: "Sin sesiones configuradas" };
     }
-    const session = data[0];
-    const connected = session.status === "CONNECTED" || session.status === "ready";
+    const connected = data.filter((s) => s.connected).length;
+    const allConnected = connected === data.length;
     return {
-      ok: connected,
-      detail: connected
-        ? `Conectado: ${session.pushName || session.name}`
-        : `Estado: ${session.status}`,
+      ok: allConnected,
+      detail: allConnected
+        ? `${connected}/${data.length} sesiones conectadas`
+        : `${connected}/${data.length} sesiones (${connected} OK)`,
     };
   } catch (err) {
     return { ok: false, detail: err.message };
@@ -109,23 +95,20 @@ async function doCheck() {
   const results = {
     timestamp: formatDate(),
     backend: await checkBackend(),
-    openwa: await checkOpenWA(),
-    session: await checkSession(),
+    sessions: await checkBaileysSessions(),
   };
 
-  const allOk = results.backend.ok && results.openwa.ok && results.session.ok;
+  const allOk = results.backend.ok && results.sessions.ok;
   const summary = allOk ? "✅ TODOS LOS SERVICIOS OK" : "❌ ALERTA - Servicios con fallo";
 
   let message = `<b>${summary}</b>\n\n`;
   message += `📡 Backend: ${results.backend.ok ? "✅" : "❌"} ${results.backend.detail}\n`;
-  message += `🔌 OpenWA:  ${results.openwa.ok ? "✅" : "❌"} ${results.openwa.detail}\n`;
-  message += `📱 Sesión:   ${results.session.ok ? "✅" : "❌"} ${results.session.detail}\n`;
+  message += `📱 WhatsApp: ${results.sessions.ok ? "✅" : "❌"} ${results.sessions.detail}\n`;
   message += `\n🕐 ${results.timestamp}`;
 
   console.log(`\n=== CHECK ${results.timestamp} ===`);
   console.log(`Backend: ${results.backend.ok ? "OK" : "FAIL"} - ${results.backend.detail}`);
-  console.log(`OpenWA:  ${results.openwa.ok ? "OK" : "FAIL"} - ${results.openwa.detail}`);
-  console.log(`Session: ${results.session.ok ? "OK" : "FAIL"} - ${results.session.detail}`);
+  console.log(`Sessions: ${results.sessions.ok ? "OK" : "FAIL"} - ${results.sessions.detail}`);
 
   const lastState = state.lastAllOk;
 
@@ -141,7 +124,7 @@ async function doCheck() {
 }
 
 loadState();
-console.log(`Monitor iniciado - intervalo: ${CHECK_INTERVAL / 1000}s`);
+console.log(`Monitor iniciado (Baileys) - intervalo: ${CHECK_INTERVAL / 1000}s`);
 
 doCheck();
 setInterval(doCheck, CHECK_INTERVAL);

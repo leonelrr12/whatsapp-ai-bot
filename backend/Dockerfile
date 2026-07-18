@@ -8,6 +8,9 @@ RUN npm install
 
 COPY . .
 
+# Create directories for auth and uploads
+RUN mkdir -p /app/auth /app/uploads
+
 EXPOSE 3000
 
 CMD ["npm", "start"]
