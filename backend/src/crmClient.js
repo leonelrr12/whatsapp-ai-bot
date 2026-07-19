@@ -23,6 +23,8 @@ async function syncLeadToCRM(customer) {
   console.log('=== CRM LEAD SYNC START ===')
   console.log('Customer phone:', customer?.phone)
 
+  let crmOk = false
+
   try {
     const payload = {
       name: customer.name || '',
@@ -43,13 +45,7 @@ async function syncLeadToCRM(customer) {
     })
 
     console.log('Lead enviado al CRM:', response.status, response.data?.lead?.id)
-
-    if (NOTIFY_GROUP) {
-      const chatId = `${NOTIFY_GROUP}@g.us`
-      const msg = formatMessage(customer)
-      await sendWhatsAppMessage(NOTIFY_GROUP, msg, chatId)
-      console.log('Notificación enviada al grupo')
-    }
+    crmOk = true
   } catch (error) {
     if (error.response) {
       console.error('Error del CRM:', error.response.status, JSON.stringify(error.response.data))
@@ -58,7 +54,20 @@ async function syncLeadToCRM(customer) {
     }
   }
 
+  // Send WhatsApp notification to internal group regardless of CRM result
+  if (NOTIFY_GROUP) {
+    try {
+      const chatId = `${NOTIFY_GROUP}@g.us`
+      const msg = formatMessage(customer)
+      await sendWhatsAppMessage(NOTIFY_GROUP, msg, chatId)
+      console.log('Notificación enviada al grupo')
+    } catch (err) {
+      console.error('Error enviando notificación al grupo:', err.message)
+    }
+  }
+
   console.log('=== CRM LEAD SYNC END ===')
+  return crmOk
 }
 
 module.exports = { syncLeadToCRM }

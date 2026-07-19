@@ -170,9 +170,12 @@ async function processMessageLocked(msg) {
           const claimed = await claimSubmission(from);
           if (claimed) {
             console.log("Flow completado via imagen, sincronizando...");
-            await syncLeadToCRM(claimed);
-            if (process.env.GOOGLE_SHEETS_ENABLED === 'true') {
-              await appendToGoogleSheet(claimed);
+            const crmOk = await syncLeadToCRM(claimed);
+            if (!crmOk) {
+              await updateCustomerMemory(from, "submitted", "false");
+              console.log("CRM falló (imagen), submitted revertido para reintento");
+            } else if (process.env.GOOGLE_SHEETS_ENABLED === 'true') {
+              await appendToGoogleSheet(claimed).catch(e => console.error('Google Sheets error:', e.message));
             }
           } else {
             console.log("Ya procesado anteriormente (imagen), omitiendo");
@@ -251,9 +254,12 @@ async function processMessageLocked(msg) {
       const claimed = await claimSubmission(from);
       if (claimed) {
         console.log("Flow completado, sincronizando...");
-        await syncLeadToCRM(claimed);
-        if (process.env.GOOGLE_SHEETS_ENABLED === 'true') {
-          await appendToGoogleSheet(claimed);
+        const crmOk = await syncLeadToCRM(claimed);
+        if (!crmOk) {
+          await updateCustomerMemory(from, "submitted", "false");
+          console.log("CRM falló, submitted revertido para reintento");
+        } else if (process.env.GOOGLE_SHEETS_ENABLED === 'true') {
+          await appendToGoogleSheet(claimed).catch(e => console.error('Google Sheets error:', e.message));
         }
       } else {
         console.log("Ya procesado anteriormente, omitiendo");
