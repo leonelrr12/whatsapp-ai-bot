@@ -48,8 +48,22 @@ async function updateCustomerMemory(phone, field, value) {
   )
 }
 
+async function claimSubmission(phone) {
+  const result = await db.query(
+    `UPDATE customers
+     SET submitted = 'true',
+         updated_at = NOW()
+     WHERE phone = $1
+       AND (submitted IS NULL OR submitted != 'true')
+     RETURNING *`,
+    [phone],
+  );
+  return result.rows[0] || null;
+}
+
 module.exports = {
   getCustomer,
   createCustomer,
   updateCustomerMemory,
+  claimSubmission,
 }

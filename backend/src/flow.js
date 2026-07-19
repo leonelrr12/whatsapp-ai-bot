@@ -173,6 +173,16 @@ async function processMessage(phone, text, useAI = false) {
     return { useAI: true };
   }
 
+  // Allow restarting from END state with a greeting
+  if (currentState === FLOW_STATES.END) {
+    const greetings = ["hola", "hola!", "hola.", "hi", "hi!", "hello", "hello!", "buenos días", "buenos dias", "buenas tardes", "buenas noches", "hola de nuevo", "reiniciar", "empezar de nuevo"];
+    if (greetings.includes(text.toLowerCase().trim())) {
+      await updateCustomerMemory(phone, "flow_state", FLOW_STATES.GREETING);
+      await updateCustomerMemory(phone, "submitted", "false");
+      return { text: WELCOME_MESSAGE, nextState: FLOW_STATES.GREETING };
+    }
+  }
+
   // Check if this is the first message (show welcome AND process the selection)
   if (currentState === FLOW_STATES.GREETING) {
     const option = text.trim();
@@ -237,11 +247,6 @@ async function processMessage(phone, text, useAI = false) {
       text: "Disculpa, ¿podrías responder con el número de la opción (1-4)?",
       nextState: FLOW_STATES.SERVICE_INFO,
     };
-  }
-
-  if (currentState === FLOW_STATES.COMPLETE && text.length < 20) {
-    const response = RESPONSES[FLOW_STATES.COMPLETE].default;
-    return { text: response.text, nextState: FLOW_STATES.COMPLETE };
   }
 
   const flowResponse = getFlowResponse(currentState, text, customer);

@@ -10,6 +10,7 @@ const {
   getCustomer,
   createCustomer,
   updateCustomerMemory,
+  claimSubmission,
 } = require("./memory");
 
 const { extractCustomerData } = require("./extractor");
@@ -68,31 +69,67 @@ app.get("/health", async (req, res) => {
 const processedEvents = new Map();
 const IDEMPOTENCY_TTL = 24 * 60 * 60 * 1000;
 
+// Per-user processing queue to serialize messages and prevent race conditions
+const userLocks = new Map();
+
+function withUserLock(phone, fn) {
+  const prev = userLocks.get(phone) || Promise.resolve();
+  const current = prev.then(fn, fn); // run fn even if prev rejected
+  // Clean up when this is the last in the chain
+  current.finally(() => {
+    if (userLocks.get(phone) === current) {
+      userLocks.delete(phone);
+    }
+  });
+  userLocks.set(phone, current);
+  return current;
+}
+
+async function safeSend(to, text, chatId, sessionId) {
+  try {
+    await sendWhatsAppMessage(to, text, chatId, sessionId);
+    return true;
+  } catch (err) {
+    console.error("!!! FAILED TO SEND WHATSAPP MESSAGE !!!");
+    console.error("To:", to, "Text:", text?.substring(0, 100));
+    console.error("Send error:", err.message);
+    return false;
+  }
+}
+
 async function handleIncomingMessage(msg) {
   // msg format: { from, chatId, sessionId, text, type, hasMedia, media, id, fromMe, rawMessage }
+
+  // Dedup and quick filters before acquiring the user lock
+  const msgId = msg.id;
+  if (msgId && processedEvents.has(msgId)) {
+    console.log("Evento duplicado ignorado:", msgId);
+    return;
+  }
+
+  if (msgId) processedEvents.set(msgId, Date.now());
+  if (processedEvents.size > 10000) {
+    const now = Date.now();
+    for (const [key, time] of processedEvents.entries()) {
+      if (now - time > IDEMPOTENCY_TTL) processedEvents.delete(key);
+    }
+  }
+
+  if (msg.fromMe) {
+    console.log("Mensaje propio, ignorando");
+    return;
+  }
+
+  const phone = msg.from;
+
+  // Serialize processing per user to prevent state race conditions
+  return withUserLock(phone, () => processMessageLocked(msg));
+}
+
+async function processMessageLocked(msg) {
   const tStart = Date.now();
 
   try {
-    // Dedup by message id
-    const msgId = msg.id;
-    if (msgId && processedEvents.has(msgId)) {
-      console.log("Evento duplicado ignorado:", msgId);
-      return;
-    }
-
-    if (msgId) processedEvents.set(msgId, Date.now());
-    if (processedEvents.size > 10000) {
-      const now = Date.now();
-      for (const [key, time] of processedEvents.entries()) {
-        if (now - time > IDEMPOTENCY_TTL) processedEvents.delete(key);
-      }
-    }
-
-    if (msg.fromMe) {
-      console.log("Mensaje propio, ignorando");
-      return;
-    }
-
     const from = msg.from;
     const chatId = msg.chatId;
     const sessionId = msg.sessionId;
@@ -106,12 +143,11 @@ async function handleIncomingMessage(msg) {
 
     if (msgType === "image") {
       const imageUrl = msg.media?.url || "";
-      const fileName = msg.media?.fileName || `receipt_${Date.now()}.jpg`;
 
       await db.query(
         `INSERT INTO messages(phone, message, image_url)
          VALUES($1, $2, $3)`,
-        [from, `[Imagen: ${msgId}]`, imageUrl],
+        [from, `[Imagen: ${msg.id}]`, imageUrl],
       );
 
       await createCustomer(from);
@@ -121,26 +157,29 @@ async function handleIncomingMessage(msg) {
       if (currentState === "image") {
         await updateCustomerMemory(from, "receipt_image", imageUrl);
         const flowResult = await processMessage(from, "imagen_recibida", USE_AI);
-        await sendWhatsAppMessage(from, flowResult.text, chatId, sessionId);
-        await db.query(
-          `INSERT INTO messages(phone, message)
-           VALUES($1, $2)`,
-          [from, flowResult.text],
-        );
+        const imgSendOk = await safeSend(from, flowResult.text, chatId, sessionId);
+        if (imgSendOk) {
+          await db.query(
+            `INSERT INTO messages(phone, message)
+             VALUES($1, $2)`,
+            [from, flowResult.text],
+          );
+        }
 
         if (flowResult.nextState === "complete") {
-          const updatedCustomer = await getCustomer(from);
-          if (updatedCustomer && updatedCustomer.submitted !== "true") {
+          const claimed = await claimSubmission(from);
+          if (claimed) {
             console.log("Flow completado via imagen, sincronizando...");
-            await updateCustomerMemory(from, "submitted", "true");
-            await syncLeadToCRM(updatedCustomer);
+            await syncLeadToCRM(claimed);
             if (process.env.GOOGLE_SHEETS_ENABLED === 'true') {
-              await appendToGoogleSheet(updatedCustomer);
+              await appendToGoogleSheet(claimed);
             }
+          } else {
+            console.log("Ya procesado anteriormente (imagen), omitiendo");
           }
         }
       } else {
-        await sendWhatsAppMessage(from, "¡Gracias por compartir la imagen! 📸 Un asesor la revisará pronto.", chatId, sessionId);
+        await safeSend(from, "¡Gracias por compartir la imagen! 📸 Un asesor la revisará pronto.", chatId, sessionId);
       }
 
       console.log("=== IMAGE PROCESSED OK ===");
@@ -164,19 +203,21 @@ async function handleIncomingMessage(msg) {
     if (text && (text.toLowerCase().includes("reiniciar") || text.toLowerCase().includes("empezar de nuevo"))) {
       await updateCustomerMemory(from, "submitted", "false");
       await resetFlow(from);
-      await sendWhatsAppMessage(from, WELCOME_MESSAGE, chatId, sessionId);
+      await safeSend(from, WELCOME_MESSAGE, chatId, sessionId);
       console.log("=== FLOW RESET ===");
       return;
     }
 
     if (USE_AI && text && (text.toLowerCase().includes("hablar con ia") || text.toLowerCase().includes("hablar con人工"))) {
-      const aiResponse = await askAI(text, customer);
-      await sendWhatsAppMessage(from, aiResponse, chatId, sessionId);
-      await db.query(
-        `INSERT INTO messages(phone, message)
-         VALUES($1, $2)`,
-        [from, aiResponse],
-      );
+      const aiResponse1 = await askAI(text, customer);
+      const aiSendOk1 = await safeSend(from, aiResponse1, chatId, sessionId);
+      if (aiSendOk1) {
+        await db.query(
+          `INSERT INTO messages(phone, message)
+           VALUES($1, $2)`,
+          [from, aiResponse1],
+        );
+      }
       console.log("=== AI MODE ===");
       return;
     }
@@ -184,32 +225,35 @@ async function handleIncomingMessage(msg) {
     const flowResult = await processMessage(from, text, USE_AI);
 
     if (flowResult.useAI && USE_AI) {
-      const aiResponse = await askAI(text, customer);
-      await sendWhatsAppMessage(from, aiResponse, chatId, sessionId);
-      await db.query(
-        `INSERT INTO messages(phone, message)
-         VALUES($1, $2)`,
-        [from, aiResponse],
-      );
+      const aiResponse1 = await askAI(text, customer);
+      const aiSendOk1 = await safeSend(from, aiResponse1, chatId, sessionId);
+      if (aiSendOk1) {
+        await db.query(
+          `INSERT INTO messages(phone, message)
+           VALUES($1, $2)`,
+          [from, aiResponse1],
+        );
+      }
     } else {
       console.log("Enviando respuesta a", from, "con chatId", chatId);
-      await sendWhatsAppMessage(from, flowResult.text, chatId, sessionId);
-      console.log("Respuesta enviada OK");
-      await db.query(
-        `INSERT INTO messages(phone, message)
-         VALUES($1, $2)`,
-        [from, flowResult.text],
-      );
+      const sendOk = await safeSend(from, flowResult.text, chatId, sessionId);
+      if (sendOk) {
+        console.log("Respuesta enviada OK");
+        await db.query(
+          `INSERT INTO messages(phone, message)
+           VALUES($1, $2)`,
+          [from, flowResult.text],
+        );
+      }
     }
 
     if (flowResult.nextState === "complete") {
-      const updatedCustomer = await getCustomer(from);
-      if (updatedCustomer && updatedCustomer.submitted !== "true") {
+      const claimed = await claimSubmission(from);
+      if (claimed) {
         console.log("Flow completado, sincronizando...");
-        await updateCustomerMemory(from, "submitted", "true");
-        await syncLeadToCRM(updatedCustomer);
+        await syncLeadToCRM(claimed);
         if (process.env.GOOGLE_SHEETS_ENABLED === 'true') {
-          await appendToGoogleSheet(updatedCustomer);
+          await appendToGoogleSheet(claimed);
         }
       } else {
         console.log("Ya procesado anteriormente, omitiendo");
