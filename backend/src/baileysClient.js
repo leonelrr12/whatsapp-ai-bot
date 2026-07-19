@@ -80,21 +80,51 @@ function hasMediaType(msg) {
   return !!(m.imageMessage || m.videoMessage || m.audioMessage || m.documentMessage);
 }
 
+// LID-to-phone cache: maps LID (numeric only) to real phone number
+// Needed because Baileys inconsistently includes senderPn on LID messages
+const lidToPhone = new Map();
+
 function normalizeMessage(msg, sessionId) {
   // Skip if no message content
   if (!msg.message) return null;
 
-  // Use senderPn (real phone JID) if available, otherwise use remoteJid
-  // senderPn is the actual phone number when the message comes via LID
-  const realJid = msg.key.senderPn || msg.key.remoteJid;
-  const fromRaw = realJid || "";
+  const senderPnRaw = msg.key.senderPn || "";
+  const remoteJidRaw = msg.key.remoteJid || "";
+  const isLid = remoteJidRaw.endsWith("@lid");
 
-  // Extract phone number from JID
-  const from = fromRaw.replace(/@.+$/, "");
+  let from;
+  let chatId;
+
+  if (senderPnRaw) {
+    // senderPn gives us the real phone number — always use it for identity
+    from = senderPnRaw.replace(/@.+$/, "");
+    // Cache LID → phone mapping for future messages that may lack senderPn
+    if (isLid) {
+      const lid = remoteJidRaw.replace(/@lid$/, "");
+      lidToPhone.set(lid, from);
+    }
+    // Reply via the LID (since the message came through it), not the direct phone
+    chatId = remoteJidRaw;
+  } else if (isLid) {
+    // LID message WITHOUT senderPn — try the cache
+    const lid = remoteJidRaw.replace(/@lid$/, "");
+    const cachedPhone = lidToPhone.get(lid);
+    if (cachedPhone) {
+      from = cachedPhone;
+    } else {
+      // Fallback: use the LID as identity until we learn the real phone
+      from = lid;
+    }
+    chatId = remoteJidRaw;
+  } else {
+    // Regular message (non-LID) — remoteJid IS the phone
+    from = remoteJidRaw.replace(/@.+$/, "");
+    chatId = remoteJidRaw;
+  }
 
   return {
     from,
-    chatId: realJid,
+    chatId,
     sessionId,
     text: extractText(msg),
     type: getMessageType(msg),
