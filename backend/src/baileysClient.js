@@ -295,6 +295,8 @@ async function initSingleSession(config) {
               {},
               { logger: undefined },
             );
+            const docMsg = normalized.rawMessage.message.documentMessage;
+            const isPdf = docMsg?.mimetype === 'application/pdf' || (docMsg?.fileName || '').endsWith('.pdf');
             const ext =
               normalized.type === "image"
                 ? normalized.rawMessage.message.imageMessage?.mimetype === "image/png"
@@ -302,7 +304,15 @@ async function initSingleSession(config) {
                   : "jpg"
                 : normalized.type === "video"
                   ? "mp4"
+                : isPdf
+                  ? "pdf"
                   : "bin";
+            const mimeType =
+              normalized.type === "image"
+                ? normalized.rawMessage.message.imageMessage?.mimetype || "image/jpeg"
+                : isPdf
+                  ? "application/pdf"
+                  : "application/octet-stream";
             const fileName = `receipt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
             const filePath = path.join(process.cwd(), "uploads", fileName);
             fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -312,7 +322,7 @@ async function initSingleSession(config) {
             const imageUrl = `${baseUrl}/uploads/${fileName}`;
             normalized.media = {
               data: buffer.toString("base64"),
-              mimetype: normalized.rawMessage.message.imageMessage?.mimetype || "image/jpeg",
+              mimetype: mimeType,
               url: imageUrl,
               fileName,
             };

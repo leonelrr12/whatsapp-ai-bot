@@ -206,6 +206,7 @@ async function processMessageLocked(msg) {
           type: msg.type || 'chat',
           hasMedia: msg.hasMedia || false,
           mediaUrl: msg.media?.url || null,
+          mediaMime: msg.media?.mimetype || null,
         },
         from: msg.from,
         chatId: webhookChatId,
