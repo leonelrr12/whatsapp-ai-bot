@@ -35,6 +35,43 @@ const USE_AI = process.env.USE_AI === 'true';
 console.log("=== CONFIG ===");
 console.log("USE_AI:", USE_AI);
 
+// ── OpenWa-compatible API key auth ──
+const OPENWA_API_KEY = process.env.OPENWA_API_KEY || '';
+
+function requireApiKey(req, res, next) {
+  if (!OPENWA_API_KEY) return next();
+  const key = req.headers['x-api-key'];
+  if (key !== OPENWA_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+// ── Webhook store (persisted to baileys-auth volume) ──
+const WEBHOOKS_FILE = '/app/auth/webhooks.json';
+const fs_webhooks = require('fs');
+
+function loadWebhooks() {
+  try {
+    if (fs_webhooks.existsSync(WEBHOOKS_FILE)) {
+      return JSON.parse(fs_webhooks.readFileSync(WEBHOOKS_FILE, 'utf8'));
+    }
+  } catch (e) {
+    console.error('Error loading webhooks:', e.message);
+  }
+  return {};
+}
+
+function saveWebhooks() {
+  try {
+    fs_webhooks.writeFileSync(WEBHOOKS_FILE, JSON.stringify(webhooks, null, 2));
+  } catch (e) {
+    console.error('Error saving webhooks:', e.message);
+  }
+}
+
+let webhooks = loadWebhooks();
+
 function validateEnvVars() {
   const missing = REQUIRED_ENV_VARS.filter((v) => !process.env[v]);
   if (missing.length > 0) {
@@ -138,8 +175,50 @@ async function processMessageLocked(msg) {
     const hasMedia = msg.hasMedia || false;
 
     console.log("=== MESSAGE RECEIVED ===");
-    console.log("From:", from, "Text:", text, "Type:", msgType, "HasMedia:", hasMedia);
+    console.log("From:", from, "Text:", text, "Type:", msgType, "HasMedia:", hasMedia, "Session:", sessionId);
     if (hasMedia && msg.media) console.log("Media URL:", msg.media.url);
+
+    // ── Sessions con webhooks registrados: saltar flow interno, solo forward ──
+    const sessionWebhooks = webhooks[sessionId] || [];
+    const hasExternalWebhooks = sessionWebhooks.length > 0;
+
+    if (hasExternalWebhooks) {
+      // Save message to DB for audit
+      await db.query(
+        `INSERT INTO messages(phone, message)
+         VALUES($1, $2)`,
+        [from, text || `[${msgType}]`],
+      ).catch(() => {});
+
+      await createCustomer(from).catch(() => {});
+
+      // Forward to webhook only — external service handles response
+      const webhookChatId = (msg.chatId || '')
+        .replace(/@s\.whatsapp\.net$/, '@c.us')
+        .replace(/@lid$/, '@c.us');
+      const payload = {
+        event: 'message.received',
+        session: { id: msg.sessionId, name: msg.sessionId },
+        message: {
+          from: msg.from,
+          chatId: webhookChatId,
+          body: msg.text || '',
+          text: msg.text || '',
+          type: msg.type || 'chat',
+        },
+        from: msg.from,
+        chatId: webhookChatId,
+      };
+      for (const wh of sessionWebhooks) {
+        fetch(wh.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }).catch(e => console.error(`[Webhook] Forward to ${wh.url} failed:`, e.message));
+      }
+      console.log(`[Webhook] Session ${sessionId} forwarded to ${sessionWebhooks.length} webhook(s), skipping internal flow`);
+      return;
+    }
 
     if (msgType === "image") {
       const imageUrl = msg.media?.url || "";
@@ -266,6 +345,8 @@ async function processMessageLocked(msg) {
       }
     }
 
+    // Webhook forwarding moved to top of function for sessions with webhooks
+
     console.log(`=== MESSAGE PROCESSED OK (${Date.now() - tStart}ms) ===`);
   } catch (error) {
     console.error("Error:", error.message, error.stack);
@@ -329,6 +410,90 @@ app.get("/qr/:sessionName", (req, res) => {
 </body>
 </html>`);
   });
+});
+
+// ====== OpenWa-compatible API ======
+
+// GET /api/sessions — list all WhatsApp sessions
+app.get('/api/sessions', requireApiKey, (req, res) => {
+  const allSessions = getAllSessions();
+  res.json(allSessions.map(s => ({
+    id: s.name,
+    name: s.name,
+    status: s.connected ? 'CONNECTED' : 'DISCONNECTED',
+  })));
+});
+
+// POST /api/sessions — create/register a session (noop — sessions are pre-configured)
+app.post('/api/sessions', requireApiKey, (req, res) => {
+  const { name } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'Session name required' });
+  // Session already exists in Baileys config; just return its id
+  res.json({ id: name, name, status: 'created' });
+});
+
+// GET /api/sessions/:id — get single session status
+app.get('/api/sessions/:id', requireApiKey, (req, res) => {
+  const allSessions = getAllSessions();
+  const session = allSessions.find(s => s.name === req.params.id);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+  res.json({
+    id: session.name,
+    name: session.name,
+    status: session.connected ? 'CONNECTED' : 'DISCONNECTED',
+  });
+});
+
+// GET /api/sessions/:id/webhooks — list registered webhooks
+app.get('/api/sessions/:id/webhooks', requireApiKey, (req, res) => {
+  const sessionWebhooks = webhooks[req.params.id] || [];
+  res.json(sessionWebhooks);
+});
+
+// POST /api/sessions/:id/webhooks — register a webhook
+app.post('/api/sessions/:id/webhooks', requireApiKey, (req, res) => {
+  const { url, events } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'Webhook URL required' });
+
+  if (!webhooks[req.params.id]) webhooks[req.params.id] = [];
+  const sessionWebhooks = webhooks[req.params.id];
+
+  // Avoid duplicates
+  if (!sessionWebhooks.some(w => w.url === url)) {
+    sessionWebhooks.push({ url, events: events || ['message.received'], registeredAt: new Date().toISOString() });
+    saveWebhooks();
+    console.log(`[Webhook] Registered for session ${req.params.id}: ${url}`);
+  }
+
+  res.json({ success: true, url, events: events || ['message.received'] });
+});
+
+// DELETE /api/sessions/:id/webhooks — remove a webhook by URL
+app.delete('/api/sessions/:id/webhooks', requireApiKey, (req, res) => {
+  const { url } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'Webhook URL required' });
+
+  if (webhooks[req.params.id]) {
+    webhooks[req.params.id] = webhooks[req.params.id].filter(w => w.url !== url);
+    saveWebhooks();
+  }
+  res.json({ success: true });
+});
+
+// POST /api/sessions/:id/messages/send-text — send WhatsApp message
+app.post('/api/sessions/:id/messages/send-text', requireApiKey, async (req, res) => {
+  const { chatId, text } = req.body || {};
+  if (!chatId || !text) return res.status(400).json({ error: 'chatId and text are required' });
+
+  try {
+    // Extract phone from chatId for the sendWhatsAppMessage call
+    const to = (chatId || '').replace(/@.+$/, '');
+    await sendWhatsAppMessage(to, text, chatId, req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error(`[API] send-text error (session ${req.params.id}):`, err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ====== Startup ======
