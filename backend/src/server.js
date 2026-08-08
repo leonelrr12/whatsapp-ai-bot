@@ -192,10 +192,9 @@ async function processMessageLocked(msg) {
 
       await createCustomer(from).catch(() => {});
 
-      // Forward to webhook only — external service handles response
-      const webhookChatId = (msg.chatId || '')
-        .replace(/@s\.whatsapp\.net$/, '@c.us')
-        .replace(/@lid$/, '@c.us');
+      // Forward to webhook only — external service handles response.
+      // Keep original chatId format for LID support (linked devices).
+      const webhookChatId = msg.chatId || '';
       const payload = {
         event: 'message.received',
         session: { id: msg.sessionId, name: msg.sessionId },
