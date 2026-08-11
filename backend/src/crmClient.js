@@ -3,6 +3,19 @@ const { sendWhatsAppMessage } = require('./whatsapp')
 
 const CRM_API_URL = process.env.CRM_API_URL || 'http://host.docker.internal:3001'
 const NOTIFY_GROUP = process.env.CRM_NOTIFY_GROUP || ''
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || ''
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || ''
+
+async function sendTelegramAlert(text) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return
+  try {
+    await axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      chat_id: TELEGRAM_CHAT_ID,
+      text,
+      parse_mode: 'HTML',
+    }, { timeout: 5000 })
+  } catch {}
+}
 
 function formatMessage(customer) {
   const lines = [
@@ -52,6 +65,11 @@ async function syncLeadToCRM(customer) {
     } else {
       console.error('Error conectando al CRM:', error.message)
     }
+    // Alerta Telegram por fallo de sincronización
+    const errDetail = error.response
+      ? `HTTP ${error.response.status}: ${JSON.stringify(error.response.data).substring(0, 200)}`
+      : error.message
+    sendTelegramAlert(`⚠️ <b>Fallo sync WhatsApp → CRM</b>\nLead: ${customer.name || '?'}\nTel: ${customer.phone || '?'}\nError: ${errDetail}`)
   }
 
   // Send WhatsApp notification to internal group regardless of CRM result
