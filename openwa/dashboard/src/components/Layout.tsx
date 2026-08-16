@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   LayoutDashboard,
@@ -53,20 +53,33 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
 
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  // matchMedia is more reliable than window.innerWidth: it only fires on
+  // real breakpoint crossings, not on scrollbar-width fluctuations (e.g.
+  // Android Chrome resizing the viewport when body overflow is toggled).
+  const [isMobile, setIsMobile] = useState(() =>
+    window.matchMedia('(max-width: 767.98px)').matches,
+  );
+  const location = useLocation();
 
   useEffect(() => {
-    const handleResize = () => {
-      const mobile = window.innerWidth < 768;
-      setIsMobile(mobile);
-      if (!mobile) setIsMobileOpen(false);
+    const mq = window.matchMedia('(max-width: 767.98px)');
+    const handleChange = () => {
+      setIsMobile(mq.matches);
+      if (!mq.matches) setIsMobileOpen(false);
     };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    mq.addEventListener('change', handleChange);
+    return () => mq.removeEventListener('change', handleChange);
   }, []);
 
+  // Close the mobile drawer on any route change (item clicks, programmatic
+  // navigation, browser back/forward) so it never stays open after selecting
+  // an option.
+  useEffect(() => {
+    setIsMobileOpen(false);
+  }, [location.pathname]);
+
   const handleNavClick = () => {
-    if (isMobile) setIsMobileOpen(false);
+    setIsMobileOpen(false);
   };
 
   useEffect(() => {
