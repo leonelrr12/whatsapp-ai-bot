@@ -29,8 +29,4 @@ DB_NAME=
 POSTGRES_USER=
 POSTGRES_DB=
 
-# Google Sheets (opcional)
-GOOGLE_SHEETS_ENABLED=false
-APPS_SCRIPT_URL=
-
 

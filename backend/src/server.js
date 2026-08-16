@@ -15,7 +15,6 @@ const {
 
 const { extractCustomerData } = require("./extractor");
 const { processMessage, WELCOME_MESSAGE, FLOW_STATES, resetFlow } = require("./flow");
-const { appendToGoogleSheet } = require("./googleSheets");
 const { syncLeadToCRM } = require("./crmClient");
 const { initSession, onMessage, getAllSessions, getSessionQR } = require("./baileysClient");
 
@@ -255,8 +254,6 @@ async function processMessageLocked(msg) {
             if (!crmOk) {
               await updateCustomerMemory(from, "submitted", "false");
               console.log("CRM falló (imagen), submitted revertido para reintento");
-            } else if (process.env.GOOGLE_SHEETS_ENABLED === 'true') {
-              await appendToGoogleSheet(claimed).catch(e => console.error('Google Sheets error:', e.message));
             }
           } else {
             console.log("Ya procesado anteriormente (imagen), omitiendo");
@@ -339,8 +336,6 @@ async function processMessageLocked(msg) {
         if (!crmOk) {
           await updateCustomerMemory(from, "submitted", "false");
           console.log("CRM falló, submitted revertido para reintento");
-        } else if (process.env.GOOGLE_SHEETS_ENABLED === 'true') {
-          await appendToGoogleSheet(claimed).catch(e => console.error('Google Sheets error:', e.message));
         }
       } else {
         console.log("Ya procesado anteriormente, omitiendo");
