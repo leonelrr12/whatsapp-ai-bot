@@ -7,9 +7,9 @@ This repo is a WhatsApp AI chatbot system. It has **two separate Node projects**
 | Directory | Tech | What it does |
 |-----------|------|-------------|
 | `openwa/` | NestJS 11 + TS 5 + TypeORM | WhatsApp API gateway (v0.1.6). Port **2785** (API), **2886** (dashboard) |
-| `backend/` | Express 4 + JS + PostgreSQL | AI lead-capture bot. Ollama LLM, flow-based conversation, CRM sync. Port **3000** |
+| `backend/` | Express 4 + JS + PostgreSQL | AI lead-capture bot. DeepSeek LLM (API), flow-based conversation, CRM sync. Port **3000** |
 
-Root `docker-compose.yml` orchestrates everything (nginx, openwa-api, openwa-dashboard, ollama, backend).
+Root `docker-compose.yml` orchestrates everything (nginx, openwa-api, openwa-dashboard, backend).
 
 ## Commands
 
@@ -49,7 +49,7 @@ Root `docker-compose.yml` orchestrates everything (nginx, openwa-api, openwa-das
 
 - OpenWA env must have `API_MASTER_KEY` set (or backed by `openwa/.env`)
 - Backend env requires all vars in `backend/src/server.js:23-35`
-- `backend/.env` at root configures DB, Ollama, OpenWA connection, CRM
+- `backend/.env` at root configures DB, DeepSeek API, OpenWA connection, CRM
 - Backend **PostgreSQL** schema is in `backend/schema/002_crm_tables.sql`
 - OpenWA **Chromium** for `whatsapp-web.js` — bundled in Dockerfile, set via `PUPPETEER_EXECUTABLE_PATH`
 

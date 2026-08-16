@@ -3,6 +3,12 @@ const { sendWhatsAppMessage } = require('./whatsapp')
 
 const CRM_API_URL = process.env.CRM_API_URL || 'http://host.docker.internal:3001'
 const NOTIFY_GROUP = process.env.CRM_NOTIFY_GROUP || ''
+
+// Sesiones de WhatsApp → slug de empresa en el CRM.
+// Solo las sesiones listadas sincronizan; el resto se omite deliberadamente.
+const CRM_SLUGS = {
+  'asm-bot': 'green-energy',
+}
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || ''
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || ''
 
@@ -32,9 +38,17 @@ function formatMessage(customer) {
   return lines.join('\n')
 }
 
-async function syncLeadToCRM(customer) {
+async function syncLeadToCRM(customer, sessionId) {
   console.log('=== CRM LEAD SYNC START ===')
-  console.log('Customer phone:', customer?.phone)
+  console.log('Customer phone:', customer?.phone, 'Session:', sessionId)
+
+  // Sesión sin slug configurado: no sincronizar (p. ej. contador507).
+  // Devuelve true para que el flujo no marque reintento ni alerte.
+  const slug = CRM_SLUGS[sessionId]
+  if (!slug) {
+    console.log(`Sesión "${sessionId}" sin slug CRM configurado: omitiendo sync al CRM`)
+    return true
+  }
 
   let crmOk = false
 
@@ -50,6 +64,7 @@ async function syncLeadToCRM(customer) {
       notes: customer.notes || '',
       receiptImage: customer.receipt_image || '',
       source: 'whatsapp',
+      slug,
     }
 
     const response = await axios.post(`${CRM_API_URL}/api/public/lead`, payload, {

@@ -21,7 +21,7 @@ const { initSession, onMessage, getAllSessions, getSessionQR } = require("./bail
 
 const REQUIRED_ENV_VARS = [
   "PORT",
-  "OLLAMA_URL",
+  "DEEPSEEK_API_KEY",
   "MODEL",
   "DB_HOST",
   "DB_PORT",
@@ -251,7 +251,7 @@ async function processMessageLocked(msg) {
           const claimed = await claimSubmission(from);
           if (claimed) {
             console.log("Flow completado via imagen, sincronizando...");
-            const crmOk = await syncLeadToCRM(claimed);
+            const crmOk = await syncLeadToCRM(claimed, sessionId);
             if (!crmOk) {
               await updateCustomerMemory(from, "submitted", "false");
               console.log("CRM falló (imagen), submitted revertido para reintento");
@@ -335,7 +335,7 @@ async function processMessageLocked(msg) {
       const claimed = await claimSubmission(from);
       if (claimed) {
         console.log("Flow completado, sincronizando...");
-        const crmOk = await syncLeadToCRM(claimed);
+        const crmOk = await syncLeadToCRM(claimed, sessionId);
         if (!crmOk) {
           await updateCustomerMemory(from, "submitted", "false");
           console.log("CRM falló, submitted revertido para reintento");

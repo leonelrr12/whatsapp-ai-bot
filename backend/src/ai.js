@@ -22,21 +22,29 @@ async function askAI(message, memory = {}) {
   
   try {
     const response = await retryWithBackoff(async () => {
-      return await axios.post(`${process.env.OLLAMA_URL}/api/chat`, {
-        model: process.env.MODEL,
-        messages: [
-          { role: "system", content: fullSystemPrompt },
-          { role: "user", content: message },
-        ],
-        stream: false,
-        options: {
-          num_predict: 200,
+      return await axios.post(
+        "https://api.deepseek.com/chat/completions",
+        {
+          model: process.env.MODEL,
+          messages: [
+            { role: "system", content: fullSystemPrompt },
+            { role: "user", content: message },
+          ],
+          max_tokens: 200,
           temperature: 0.3,
+          // V4 trae thinking activado por defecto; lo desactivamos para
+          // respuestas de chat rápidas (en thinking, temperature se ignora)
+          thinking: { type: "disabled" },
         },
-      });
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+          },
+        },
+      );
     });
 
-    const content = response.data.message?.content;
+    const content = response.data.choices?.[0]?.message?.content;
     console.log("Respuesta IA recibida:", content ? "SI" : "VACIA");
     
     if (!content || content.trim() === "") {
