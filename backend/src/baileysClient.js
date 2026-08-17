@@ -83,6 +83,8 @@ function hasMediaType(msg) {
 // LID-to-phone cache: maps LID (numeric only) to real phone number
 // Needed because Baileys inconsistently includes senderPn on LID messages
 const lidToPhone = new Map();
+// Phone-to-LID cache (inverso): para responder por el chatId correcto (@lid)
+const phoneToLid = new Map();
 
 function normalizeMessage(msg, sessionId) {
   // Skip if no message content
@@ -102,6 +104,7 @@ function normalizeMessage(msg, sessionId) {
     if (isLid) {
       const lid = remoteJidRaw.replace(/@lid$/, "");
       lidToPhone.set(lid, from);
+      phoneToLid.set(from, lid);
     }
     // Reply via the LID (since the message came through it), not the direct phone
     chatId = remoteJidRaw;
@@ -484,6 +487,33 @@ async function getOrCreateSession() {
   return initSession();
 }
 
+// Resuelve un chatId (posiblemente @lid) al número de teléfono real.
+// Devuelve null si el LID no está en caché (p.ej. tras reboot del bot).
+function resolvePhoneFromChatId(chatId) {
+  if (!chatId) return null;
+  const id = String(chatId).split('@')[0];
+  if (String(chatId).includes('@lid')) {
+    return lidToPhone.get(id) || null;
+  }
+  return id || null;
+}
+
+// Resuelve el jid correcto para RESPONDER a un número (phone numérico):
+// 1. Si el phone tiene un LID conocido → jid @lid (necesario en dispositivos vinculados)
+// 2. Número local panameño (8 dígitos) → prefijo 507
+// 3. Caso general → @s.whatsapp.net
+function resolveChatIdFromPhone(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) return null;
+  if (phoneToLid.has(digits)) {
+    return `${phoneToLid.get(digits)}@lid`;
+  }
+  if (/^\d{8}$/.test(digits)) {
+    return `507${digits}@s.whatsapp.net`;
+  }
+  return `${digits}@s.whatsapp.net`;
+}
+
 module.exports = {
   sendWhatsAppMessage,
   sendImage,
@@ -494,4 +524,6 @@ module.exports = {
   getAllSessions,
   getSessionQR,
   onMessage,
+  resolvePhoneFromChatId,
+  resolveChatIdFromPhone,
 };

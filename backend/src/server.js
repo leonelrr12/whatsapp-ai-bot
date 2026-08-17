@@ -16,7 +16,7 @@ const {
 const { extractCustomerData } = require("./extractor");
 const { processMessage, WELCOME_MESSAGE, FLOW_STATES, resetFlow } = require("./flow");
 const { syncLeadToCRM } = require("./crmClient");
-const { initSession, onMessage, getAllSessions, getSessionQR } = require("./baileysClient");
+const { initSession, onMessage, getAllSessions, getSessionQR, resolvePhoneFromChatId, resolveChatIdFromPhone } = require("./baileysClient");
 
 const REQUIRED_ENV_VARS = [
   "PORT",
@@ -184,8 +184,8 @@ async function processMessageLocked(msg) {
     if (hasExternalWebhooks) {
       // Save message to DB for audit
       await db.query(
-        `INSERT INTO messages(phone, message)
-         VALUES($1, $2)`,
+        `INSERT INTO messages(phone, message, direction)
+         VALUES($1, $2, 'in')`,
         [from, text || `[${msgType}]`],
       ).catch(() => {});
 
@@ -225,8 +225,8 @@ async function processMessageLocked(msg) {
       const imageUrl = msg.media?.url || "";
 
       await db.query(
-        `INSERT INTO messages(phone, message, image_url)
-         VALUES($1, $2, $3)`,
+        `INSERT INTO messages(phone, message, image_url, direction)
+         VALUES($1, $2, $3, 'in')`,
         [from, `[Imagen: ${msg.id}]`, imageUrl],
       );
 
@@ -240,8 +240,8 @@ async function processMessageLocked(msg) {
         const imgSendOk = await safeSend(from, flowResult.text, chatId, sessionId);
         if (imgSendOk) {
           await db.query(
-            `INSERT INTO messages(phone, message)
-             VALUES($1, $2)`,
+            `INSERT INTO messages(phone, message, direction)
+             VALUES($1, $2, 'out')`,
             [from, flowResult.text],
           );
         }
@@ -273,8 +273,8 @@ async function processMessageLocked(msg) {
     }
 
     await db.query(
-      `INSERT INTO messages(phone, message)
-       VALUES($1, $2)`,
+      `INSERT INTO messages(phone, message, direction)
+       VALUES($1, $2, 'in')`,
       [from, text],
     );
 
@@ -294,8 +294,8 @@ async function processMessageLocked(msg) {
       const aiSendOk1 = await safeSend(from, aiResponse1, chatId, sessionId);
       if (aiSendOk1) {
         await db.query(
-          `INSERT INTO messages(phone, message)
-           VALUES($1, $2)`,
+          `INSERT INTO messages(phone, message, direction)
+           VALUES($1, $2, 'out')`,
           [from, aiResponse1],
         );
       }
@@ -310,8 +310,8 @@ async function processMessageLocked(msg) {
       const aiSendOk1 = await safeSend(from, aiResponse1, chatId, sessionId);
       if (aiSendOk1) {
         await db.query(
-          `INSERT INTO messages(phone, message)
-           VALUES($1, $2)`,
+          `INSERT INTO messages(phone, message, direction)
+           VALUES($1, $2, 'out')`,
           [from, aiResponse1],
         );
       }
@@ -321,8 +321,8 @@ async function processMessageLocked(msg) {
       if (sendOk) {
         console.log("Respuesta enviada OK");
         await db.query(
-          `INSERT INTO messages(phone, message)
-           VALUES($1, $2)`,
+          `INSERT INTO messages(phone, message, direction)
+           VALUES($1, $2, 'out')`,
           [from, flowResult.text],
         );
       }
@@ -485,10 +485,70 @@ app.post('/api/sessions/:id/messages/send-text', requireApiKey, async (req, res)
   try {
     // Extract phone from chatId for the sendWhatsAppMessage call
     const to = (chatId || '').replace(/@.+$/, '');
-    await sendWhatsAppMessage(to, text, chatId, req.params.id);
+    // Resolver el jid correcto (LID / prefijo local / estándar) desde el phone
+    const jid = resolveChatIdFromPhone(to) || chatId;
+    await sendWhatsAppMessage(to, text, jid, req.params.id);
+    // Log del saliente para que el hilo del chat quede completo
+    await db.query(
+      `INSERT INTO messages(phone, message, direction)
+       VALUES($1, $2, 'out')`,
+      [to, text],
+    ).catch(() => {});
     res.json({ success: true });
   } catch (err) {
     console.error(`[API] send-text error (session ${req.params.id}):`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/sessions/:id/messages — historial de mensajes del chat (openwa-compatible)
+app.get('/api/sessions/:id/messages', requireApiKey, async (req, res) => {
+  try {
+    const chatId = String(req.query.chatId || '');
+    const phoneParam = String(req.query.phone || '');
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+    const offset = parseInt(req.query.offset, 10) || 0;
+
+    // Candidatos de identidad: número del chatId, LID resuelto, y phone explícito
+    // (los mensajes se guardan por phone numérico, con variantes -device y LID)
+    const candidates = [];
+    const raw = chatId.split('@')[0];
+    if (raw) candidates.push(raw);
+    if (chatId.includes('@lid')) {
+      const resolved = resolvePhoneFromChatId(chatId);
+      if (resolved) candidates.push(resolved);
+    }
+    if (phoneParam) candidates.push(phoneParam.replace(/\D/g, ''));
+    const unique = [...new Set(candidates)].filter(Boolean);
+    if (unique.length === 0) return res.status(400).json({ error: 'chatId or phone required' });
+
+    const patterns = unique.map(c => c + '-%');
+    const result = await db.query(
+      `SELECT id, phone, message, image_url, direction,
+              (created_at AT TIME ZONE 'UTC') AS created_at,
+              count(*) OVER () AS total
+       FROM messages
+       WHERE phone = ANY($1::text[]) OR phone LIKE ANY($2::text[])
+       ORDER BY created_at DESC, id DESC
+       LIMIT $3 OFFSET $4`,
+      [unique, patterns, limit, offset],
+    );
+
+    const total = result.rows.length ? Number(result.rows[0].total) : 0;
+    const messages = result.rows
+      .reverse() // DESC → ASC cronológico
+      .map(r => ({
+        id: r.id,
+        chatId,
+        fromMe: r.direction === 'out',
+        text: r.message,
+        timestamp: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+        type: r.image_url ? 'image' : /^\[.*\]$/.test(r.message || '') ? 'media' : 'chat',
+      }));
+
+    res.json({ messages, total, limit, offset });
+  } catch (err) {
+    console.error('[API] messages error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -497,6 +557,10 @@ app.post('/api/sessions/:id/messages/send-text', requireApiKey, async (req, res)
 
 app.listen(process.env.PORT, "0.0.0.0", async () => {
   console.log(`Servidor corriendo en puerto ${process.env.PORT}`);
+
+  // Migración idempotente: dirección de los mensajes (in/out) para el chat del CRM
+  await db.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS direction VARCHAR(8) NOT NULL DEFAULT 'in'`)
+    .catch(() => {});
 
   // Start Baileys sessions
   const result = await initSession();
