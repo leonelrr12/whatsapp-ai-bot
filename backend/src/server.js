@@ -486,7 +486,12 @@ app.post('/api/sessions/:id/messages/send-text', requireApiKey, async (req, res)
     // Extract phone from chatId for the sendWhatsAppMessage call
     const to = (chatId || '').replace(/@.+$/, '');
     // Resolver el jid correcto (LID / prefijo local / estándar) desde el phone
-    const jid = resolveChatIdFromPhone(to) || chatId;
+    // contador507: los envíos a @lid se pierden EN SILENCIO (LID del contacto
+    // obsoleto en esa sesión). Fuerza el JID clásico; las demás sesiones
+    // (asm-bot, etc.) conservan la resolución LID normal.
+    const jid = req.params.id === 'contador507'
+      ? `${to}@s.whatsapp.net`
+      : (resolveChatIdFromPhone(to) || chatId);
     await sendWhatsAppMessage(to, text, jid, req.params.id);
     // Log del saliente para que el hilo del chat quede completo
     await db.query(
