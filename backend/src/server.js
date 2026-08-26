@@ -551,7 +551,19 @@ app.get('/api/sessions/:id/messages', requireApiKey, async (req, res) => {
         type: r.image_url ? 'image' : /^\[.*\]$/.test(r.message || '') ? 'media' : 'chat',
       }));
 
-    res.json({ messages, total, limit, offset });
+    // Último mensaje entrante del cliente (ventana de servicio de 24h de Meta):
+    // la ventana se abre con el último 'in' y se resetea con cada mensaje del cliente.
+    const lastInResult = await db.query(
+      `SELECT MAX(created_at) AS last_in FROM messages
+       WHERE direction = 'in' AND (phone = ANY($1::text[]) OR phone LIKE ANY($2::text[]))`,
+      [unique, patterns],
+    ).catch(() => ({ rows: [] }));
+    const lastIncomingRaw = lastInResult.rows?.[0]?.last_in;
+    const lastIncomingAt = lastIncomingRaw
+      ? (lastIncomingRaw instanceof Date ? lastIncomingRaw.toISOString() : String(lastIncomingRaw))
+      : null;
+
+    res.json({ messages, total, limit, offset, lastIncomingAt });
   } catch (err) {
     console.error('[API] messages error:', err.message);
     res.status(500).json({ error: err.message });
