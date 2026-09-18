@@ -1,0 +1,27 @@
+# Contexto de build de backend/ — lo que NO debe hornearse en la imagen.
+#
+# Importa porque el Dockerfile hace `COPY . .` (después de `RUN npm install`):
+# todo lo que no esté listado acá termina dentro de la imagen.
+
+# Dependencias del host. Las correctas las instala `RUN npm install` dentro de
+# la imagen; copiar las del host encima pisa esa instalación y puede romper
+# módulos nativos compilados para otra plataforma.
+node_modules
+
+# Datos de runtime — llegan por bind mount / volumen, nunca desde la imagen
+# (ver docker-compose.yml):
+#   ./backend/uploads  →  /app/uploads   (archivos recibidos)
+#   baileys-auth       →  /app/auth      (sesiones de WhatsApp)
+uploads
+auth
+
+# Secretos y metadatos del repo
+.env
+.env.*
+.git
+.gitignore
+
+# Ruido
+*.log
+npm-debug.log*
+.DS_Store
