@@ -277,6 +277,9 @@ async function initSingleSession(config) {
         if (msg.key.fromMe) continue;
         if (!msg.message) continue;
 
+        // Skip WhatsApp statuses (status@broadcast) — not direct messages
+        if (msg.key.remoteJid === "status@broadcast") continue;
+
         // Skip old append messages (only process recent ones)
         if (type === "append") {
           const msgAge = (Date.now() / 1000) - (msg.messageTimestamp || 0);
